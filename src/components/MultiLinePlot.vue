@@ -6,7 +6,7 @@
 <script setup>
 import { onMounted, ref, watch, onUnmounted } from 'vue';
 import * as d3 from 'd3';
-import { calcDataExtent, interpolateYCoordinate, sampleArray, calcDataXExtent, calcDataYExtent } from '../utility';
+import { calcDataExtent, interpolateYCoordinate, generateUUID, calcDataXExtent, calcDataYExtent } from '../utility';
 
 let svg, xScale, yScale;
 const props = defineProps({
@@ -33,7 +33,7 @@ let cursor_visible = false;
 let cursor_dragging = false;
 const margin = { top: 30, right: 10, bottom: 20, left: 30 };
 
-function drawChart(x_domain, y_domain) {
+async function drawChart(x_domain, y_domain) {
     console.time('drawStart');
     xScale = d3.scaleLinear()
       .domain(x_domain)
@@ -41,49 +41,41 @@ function drawChart(x_domain, y_domain) {
     yScale = d3.scaleLinear()
       .domain(y_domain)
       .range([height - margin.bottom - margin.top, 0]);
-    const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
-                        .attr('height', height-margin.bottom-margin.top)
-                        .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`);
+    
     svg = d3.select(chartContainer.value)
       .append('svg')
       .attr('width', width)
       .attr('height', height)
       .attr('tabindex', "0")
       .attr('style', 'position: absolute; left:0; top:0; z-index: 1;')
+    
 
     const chart = svg.append('g')
                      .attr('transform', `translate(${margin.left}, ${margin.top})`);
-    const line = d3.line()
-      .x(d => xScale(d[0]))
-      .y(d => yScale(d[1]));
+    
     console.timeEnd('drawStart');
     console.time("drawLinePath");
     for ( const key in data) {
       let data_to_draw = data[key]["data"]["x"].map((x, i) => [x, data[key]["data"]["y"][i]]);
       const {color, stroke, circle, file} = data[key];
-      if (data_to_draw.length > 2000) {
-        data_to_draw = sampleArray(data_to_draw, Math.max(2, Math.floor(data_to_draw.length/2000)));
-      }
-      chart.append('g')
-      .attr('class', `line-${key}`)
-      .append('path')
-      .datum(data_to_draw)
-      .attr('fill', 'transparent')
-      .attr('stroke', color)
-      .attr('stroke-width', stroke)
-      .attr("stroke-linecap", "round")
-      .attr('d', line)
-      .on("mouseover", function(event) {
-        if (zoom.zoom_status === "none" && !cursor_dragging) {
-          const [x, y] = d3.pointer(event, svg.node());
-          d3.select(this).attr('stroke-width', stroke * 2);
-          drawLabel(chart, key+" "+file, x, y, color, 'line-label');
-        }
-      }).on("mouseout", function(event) {
-        if (zoom.zoom_status === "none" && !cursor_dragging) {
-          d3.select(this).attr('stroke-width', stroke);
-          chart.selectAll('.line-label').remove();
-      }});
+      const id = await generateUUID(file, key);
+      const idSelector = `id-${id}`;
+      console.log(idSelector);
+      d3.select("#"+idSelector).remove();   // remove old line first
+      const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
+                        .attr('height', height-margin.bottom-margin.top)
+                        .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`)
+                        .attr('id', idSelector);
+      const ctx = canvas.node().getContext('2d');
+      const line = d3.line()
+                      .x(d => xScale(d[0]))
+                      .y(d => yScale(d[1]))
+                      .context(ctx);
+      ctx.beginPath(); // start a new path
+      line(data_to_draw);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = stroke;
+      ctx.stroke();
 
       if (circle) {
         chart.append('g')

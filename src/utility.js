@@ -113,3 +113,25 @@ export function sampleArray(arr, step = 10) {
   }
   return result;
 }
+
+export async function generateUUID(fileName, signalName) {
+  const text = fileName + "::" + signalName; // 拼接两段字符串
+  const data = new TextEncoder().encode(text);
+
+  // 计算 SHA-256
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+
+  // 取前16字节拼成 UUID v4 格式
+  hashArray[6] = (hashArray[6] & 0x0f) | 0x40; // UUID 版本号 v4
+  hashArray[8] = (hashArray[8] & 0x3f) | 0x80; // UUID variant
+
+  const hex = hashArray.slice(0, 16).map(b => b.toString(16).padStart(2, "0")).join("");
+  return (
+    hex.slice(0, 8) + "-" +
+    hex.slice(8, 12) + "-" +
+    hex.slice(12, 16) + "-" +
+    hex.slice(16, 20) + "-" +
+    hex.slice(20)
+  );
+}
