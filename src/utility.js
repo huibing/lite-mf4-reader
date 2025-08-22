@@ -1,13 +1,5 @@
 import * as d3 from 'd3';
 
-
-export const calcDataExtent = (data) => {
-  const keys = Object.keys(data);
-  const concat_x_data = keys.flatMap(key => data[key]["data"].map(d => d[0])); // 将所有x数据合并到一个数组中
-  const concat_y_data = keys.flatMap(key => data[key]["data"].map(d => d[1])); // 将所有y数据合并到一个数组中
-  return [d3.extent(concat_x_data), d3.extent(concat_y_data)]
-}
-
 export const calcDataXExtent = (data) => {
     const keys = Object.keys(data);
     let min = Infinity;
@@ -32,6 +24,26 @@ export const calcDataYExtent = (data) => {
     return [min, max];
 }
 
+export function calcDataYextWithinX(data, xDomain) {   // this function will cost time for large data
+    const keys = Object.keys(data);
+    let min = Infinity;
+    let max = -Infinity;
+    for (let k of keys) {
+      const [xMinIndex, xMaxIndex] = findRange(data[k].pathData.map(d => d[0]), xDomain);   // 找到x轴范围内的数据索引
+      const yData = data[k].pathData.map(d => d[1]).slice(xMinIndex, xMaxIndex + 1);   // 提取y轴范围内的数据
+      const yDomain = d3.extent(yData);   // 计算y轴范围
+      if (yDomain[0] < min) min = yDomain[0];
+      if (yDomain[1] > max) max = yDomain[1];
+    }
+    return [min, max];
+}
+
+export function calcYextWithinX(arr, xDomain, timeArray) {
+  const [xMinIndex, xMaxIndex] = findRange(timeArray, xDomain);
+  const yData = arr.map(d => d[1]).slice(xMinIndex, xMaxIndex + 1);
+  return d3.extent(yData);
+}
+
 export function generateColorWheelColors(count = 12) {
   const colors = [];
   for (let i = 0; i < count; i++) {
@@ -41,40 +53,17 @@ export function generateColorWheelColors(count = 12) {
   return colors;
 }
 
-export function interpolateYCoordinate1(data, xValue) {   // data: [[x1, y1], [x2, y2], ...]
-  if (data.length === 0) return null; // 如果数据为空，返回null
-  if (data.length === 1) return data[0][1]; // 如果只有一个点，直接返回y值
-  // assuming data is sorted by xValue
-  if (xValue < data[0][0]) {
-    return data[0][1];
-  } else if (xValue > data[data.length - 1][0]) {
-    return data[data.length - 1][1];
-  } else {
-    for (let i = 0; i < data.length - 1; i++) {
-      if (xValue >= data[i][0] && xValue <= data[i + 1][0]) {
-        const x0 = data[i][0];
-        const y0 = data[i][1];
-        const x1 = data[i + 1][0];
-        const y1 = data[i + 1][1];
-        return y0 + (y1 - y0) * (xValue - x0) / (x1 - x0);
-      }
-  }
-  }
-}
-
 export function interpolateYCoordinate(data, xValue) {
-  const x = data["x"];
-  const y = data["y"];
-  const dataLen = data["x"].length;
+  const dataLen = data.length;
   if (dataLen === 0) return null;
   if (dataLen === 1) return y[0];
 
   // assuming data is sorted by xValue
-  if (xValue <= x[0]) {
-    return y[0];
+  if (xValue <= data[0][0]) {
+    return data[0][1];
   }
-  if (xValue >= x[dataLen - 1]) {
-    return y[dataLen - 1];
+  if (xValue >= data[dataLen - 1][0]) {
+    return data[dataLen - 1][1];
   }
 
   // 二分查找区间
@@ -82,10 +71,10 @@ export function interpolateYCoordinate(data, xValue) {
   let high = dataLen - 1;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const midX = x[mid];
+    const midX = data[mid][0];
 
     if (midX === xValue) {
-      return y[mid]; // 刚好匹配
+      return data[mid][1]; // 刚好匹配
     } else if (midX < xValue) {
       low = mid + 1;
     } else {
@@ -94,24 +83,17 @@ export function interpolateYCoordinate(data, xValue) {
   }
 
   // high 是左端点索引，low 是右端点索引
-  const x0 = x[high];
-  const y0 = y[high];
-  const x1 = x[low];
-  const y1 = y[low];
+  const x0 = data[high][0];
+  const y0 = data[high][1];
+  const x1 = data[low][0];
+  const y1 = data[low][1];
 
   // 线性插值
   return y0 + (y1 - y0) * (xValue - x0) / (x1 - x0);
 }
 
-export function sampleArray(arr, step = 10) {
-  if (!Array.isArray(arr)) throw new Error("输入必须是数组");
-  if (step <= 0) throw new Error("step 必须大于 0");
-
-  const result = [];
-  for (let i = 0; i < arr.length; i += step) {
-    result.push(arr[i]);
-  }
-  return result;
+export function isXinRange(xValue, data) {
+  return xValue >= data[0] && xValue <= data.at(-1);
 }
 
 export async function generateUUID(fileName, signalName) {
@@ -134,4 +116,134 @@ export async function generateUUID(fileName, signalName) {
     hex.slice(16, 20) + "-" +
     hex.slice(20)
   );
+}
+
+function lowerBound(arr, target) {
+  let left = 0, right = arr.length; // [left, right)
+  while (left < right) {
+    const mid = (left + right) >> 1;
+    if (arr[mid] < target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left; // 第一个 >= target 的位置
+}
+
+function upperBound(arr, target) {
+  let left = 0, right = arr.length; // [left, right)
+  while (left < right) {
+    const mid = (left + right) >> 1;
+    if (arr[mid] <= target) {
+      left = mid + 1;
+    } else {
+      right = mid;
+    }
+  }
+  return left; // 第一个 > target 的位置
+}
+
+export function findRange(arr, xDomain) {
+  const start = lowerBound(arr, xDomain[0]);
+  const end = upperBound(arr, xDomain[1]) - 1;
+  if (start <= end && start < arr.length) {
+    return [start, end]; // 索引范围
+  }
+  return [0, arr.length - 1]; // 默认返回整个数组避免错误
+}
+
+// 按像素列聚合：每个 x 像素保留 yMin、yMax
+export function downsamplePerPixel(points, width, xScale) {
+  const buckets = Array.from({length: width}, () => [Infinity, -Infinity]);
+  const x0 = xScale.domain()[0], x1 = xScale.domain()[1];
+  const k = (width - 1) / (x1 - x0);     // 像素/单位长度   单位长度上面的像素数量
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const col = Math.round((p[0] - x0) * k);
+    if (col < 0 || col >= width) continue;
+    if (p[1] < buckets[col][0]) buckets[col][0] = p[1];
+    if (p[1] > buckets[col][1]) buckets[col][1] = p[1];
+  }
+
+  const reduced = [];
+  for (let col = 0; col < width; col++) {
+    const [minY, maxY] = buckets[col];
+    if (minY !== Infinity) {
+      // 注意顺序：画一根细“竖线”，视觉上接近原曲线外包络
+      reduced.push([xScale.invert(col), minY]);
+      if (maxY !== minY) reduced.push([xScale.invert(col), maxY]);
+    }
+  }
+  return reduced;
+}
+
+
+export async function downsampleParallel(points, width, x0, x1, maxWorkers) {   // 并行计算
+  // 动态选择 Worker 数：默认 CPU 核数，至少 1
+  const numWorkers = Math.min(
+    maxWorkers || navigator.hardwareConcurrency || 4,
+    points.length // 不要超过点数
+  );
+
+  const chunkSize = Math.ceil(points.length * 2 / numWorkers);
+  const workers = [];
+  const promises = [];
+  const totalChunks = flattenPoints(points);
+
+  for (let i = 0; i < numWorkers; i++) {
+    const worker = new Worker("downsampleWorker.js");
+    workers.push(worker);
+    const start = i * chunkSize * 2;
+    const end = Math.min(totalChunks.length, (i + 1) * chunkSize * 2);
+    const chunk = totalChunks.subarray(start, end); // 不拷贝，subarray 是 view
+    promises.push(new Promise(resolve => {
+      worker.onmessage = e => {
+        resolve(e.data);
+        worker.terminate();
+      };
+    }));
+    worker.postMessage({ points: chunk, width, x0, x1 });
+  }
+
+  const results = await Promise.all(promises);
+  // 合并桶结果
+  const buckets = new Float64Array(width * 2);
+  for (let i = 0; i < width; i++) {
+    buckets[i * 2] = Infinity;
+    buckets[i * 2 + 1] = -Infinity;
+  }
+
+  for (const partial of results) {
+    for (let i = 0; i < width; i++) {
+      const idx = i * 2;
+      if (partial[idx] < buckets[idx]) buckets[idx] = partial[idx];
+      if (partial[idx + 1] > buckets[idx + 1]) buckets[idx + 1] = partial[idx + 1];
+    }
+  }
+
+  // 生成最终的 (x, y)
+  const invK = (x1 - x0) / (width - 1);
+  const reduced = [];
+  for (let col = 0; col < width; col++) {
+    const minY = buckets[col * 2];
+    const maxY = buckets[col * 2 + 1];
+    if (minY !== Infinity) {
+      const x = x0 + col * invK;
+      reduced.push([x, minY]);
+      if (maxY !== minY) reduced.push([x, maxY]);
+    }
+  }
+  return reduced;
+}
+
+
+function flattenPoints(points) {
+  const flat = new Float64Array(points.length * 2);
+  for (let i = 0; i < points.length; i++) {
+    flat[i * 2] = points[i][0];
+    flat[i * 2 + 1] = points[i][1];
+  }
+  return flat;
 }

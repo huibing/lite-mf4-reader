@@ -14,16 +14,21 @@
       draggable="true"
       @dragstart="handleDragStart"
     >
-      <span class="w-3/4 text-left overflow-hidden">{{ line[0] }}</span> <span>|[{{ getFileIndex(line[1]) }}]</span>
+      <span class="w-3/4 text-left overflow-hidden">{{ line[0] }}</span> <span :title="line[1]">|[{{ getFileIndex(line[1]) }}]</span>
     </div>
   
   </div>
   <div class="flex justify-end w-full opacity-60" v-if="lines.length > 0"><span class="pr-4 text-xs">Total of {{ lines.length }} variables</span></div>
+  <div class="flex justify-end w-full opacity-80" v-if="selectedLines.length > 0">
+    <span class="pr-4 text-xs text-blue-900 font-black">Selected {{ selectedLines.length }} variables</span></div>
+  <div class="flex h-full items-end justify-center">
+    <button class="btn text-purple-800" @click="selectedLines=[]">清空选中行</button></div>
   
 </template>
 
 <script setup>
 import { ref, onMounted , watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 
 // 接收父级传入的内容
 const props = defineProps({
@@ -36,6 +41,7 @@ const props = defineProps({
     required: true
   }
 });
+const emit = defineEmits(['value-pre-read']);
 const lines = ref([]);
 onMounted(() => {
   lines.value = props.content;
@@ -59,12 +65,17 @@ function isSelected(line) {
 
 function handleDragStart(event) {
   const payload = selectedLines.value.length > 0
-    ? selectedLines.value
-    : [] // 如果没选，什么也不传
+    ? selectedLines.value : [];
   const payloadString = payload.map(line => [line[0], line[1]]);
   event.dataTransfer.effectAllowed = "copy";
-  // 设置字符串（必须为字符串）
-  event.dataTransfer.setData('application/json', JSON.stringify(payloadString))
+  event.dataTransfer.setData('application/json', JSON.stringify(payloadString));
+  payload.forEach(variable => {
+    invoke("get_mf4_channel_data", {"mf4Path": variable[1], "channelName": variable[0]})   // start to read data from mf4 file when drag start
+            .then(res => {
+              emit('value-pre-read', res, variable[0], variable[1]);
+            }).catch(err => {
+              console.error(err);}) 
+  });
 }
 
 const handleInput = (event) => {
@@ -118,4 +129,19 @@ watch(() => props.content, () => {
   color: white;
 }
 
+.btn {
+  margin-bottom: 10px;
+  border-radius: 1em;
+  font-size: 1em;
+  background-color: #96c4ff;
+}
+
+.btn:hover {
+  background-color: #ffffffa4;
+  border-color: #ffffff;
+}
+
+.btn:active {
+  transform: translate(0, 2px);
+}
 </style>

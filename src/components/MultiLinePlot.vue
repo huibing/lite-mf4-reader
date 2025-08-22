@@ -6,20 +6,21 @@
 <script setup>
 import { onMounted, ref, watch, onUnmounted } from 'vue';
 import * as d3 from 'd3';
-import { calcDataExtent, interpolateYCoordinate, generateUUID, calcDataXExtent, calcDataYExtent } from '../utility';
+import { interpolateYCoordinate, generateUUID, calcDataXExtent, calcYextWithinX, downsampleParallel,
+  calcDataYExtent , isXinRange, findRange , downsamplePerPixel, calcDataYextWithinX } from '../utility';
 
-let svg, xScale, yScale;
+let svg, xScale, yScale, currentXDomain, currentYDomain, chart;
 const props = defineProps({
-  data: Object,
+  lineData: Object,
   width: Number,
   height: Number,
   xDomain: Array,    // [xmin, xmax]
   yDomain: Array,    // [ymin, ymax]
-  update: {
-    type: Boolean,
-    default: true
-  }
+  hasJob: Boolean
 });
+const jobQueue = defineModel();
+const labelXOff = 45;
+let customYScale = {};  // {variable: yScale}  将变量显示到单独的stripe上面
 
 const chartContainer = ref(null);
 let zoom = {
@@ -28,88 +29,69 @@ let zoom = {
     zoom_start: [0, 0],   // in domain coordinates not pixel coordinates
     zoom_end: [0, 0],
 };
-let { data, width, height,  update} = props;
+let { lineData, width, height, hasJob} = props;
 let cursor_visible = false;
 let cursor_dragging = false;
 const margin = { top: 30, right: 10, bottom: 20, left: 30 };
 
+const updateCursor = (xOffset) => {
+    ({ lineData, width, height, hasJob} = props);
+    if (!cursor_visible) {
+      d3.select(chartContainer.value).select('.cursor-line')
+      .attr('opacity', 0).attr("class", "cursor-line");// Hide cursor line
+      d3.selectAll('.cursor-label').attr('opacity', 0); // Hide cursor labels
+    } else {
+        const xValue = xScale.invert(xOffset);  
+        const cursorRegion = d3.select(chartContainer.value).select('.cursor-region');
+        cursorRegion.attr('transform', `translate(${xOffset}, 0)`);   // move the cursor region
+        d3.select(chartContainer.value).select('.cursor-line')
+        .attr('opacity', 1).attr("class", "cursor-line cursor-col-resize"); // Show cursor line
+        for (const variable in lineData) {
+          const {color, uuid} = lineData[variable];
+          const xDom = lineData[variable].x_domain;   
+          const dataList = lineData[variable].pathData;
+          const label = d3.select(chartContainer.value).select(`#label-${uuid}`);
+          const ySigScale = (customYScale != null && Object.hasOwn(customYScale, uuid)) ? customYScale[uuid] : yScale;
+          if (xValue >= xDom[0] && xValue <= xDom[1]) {
+            const yValue = interpolateYCoordinate(dataList, xValue); // interpolate y value
+            const yCoordination = ySigScale(yValue);
+            if (!label.empty()) {
+              label.attr('opacity', 1).attr('transform', `translate(${labelXOff}, ${yCoordination})`);
+              label.select('text').text(yValue.toFixed(5));
+            } else {
+              drawLabel(cursorRegion, yValue.toFixed(5), labelXOff, yCoordination, color, "cursor-label", `label-${uuid}`);
+            }
+          } else {
+            label.attr('opacity', 0);
+          }
+        }
+    }
+}
+
 async function drawChart(x_domain, y_domain) {
-    console.time('drawStart');
     xScale = d3.scaleLinear()
       .domain(x_domain)
       .range([0, width - margin.right - margin.left]);
     yScale = d3.scaleLinear()
       .domain(y_domain)
       .range([height - margin.bottom - margin.top, 0]);
-    
     svg = d3.select(chartContainer.value)
       .append('svg')
       .attr('width', width)
       .attr('height', height)
       .attr('tabindex', "0")
       .attr('style', 'position: absolute; left:0; top:0; z-index: 1;')
-    
-
-    const chart = svg.append('g')
+    chart = svg.append('g')
                      .attr('transform', `translate(${margin.left}, ${margin.top})`);
-    
-    console.timeEnd('drawStart');
-    console.time("drawLinePath");
-    for ( const key in data) {
-      let data_to_draw = data[key]["data"]["x"].map((x, i) => [x, data[key]["data"]["y"][i]]);
-      const {color, stroke, circle, file} = data[key];
-      const id = await generateUUID(file, key);
-      const idSelector = `id-${id}`;
-      console.log(idSelector);
-      d3.select("#"+idSelector).remove();   // remove old line first
-      const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
-                        .attr('height', height-margin.bottom-margin.top)
-                        .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`)
-                        .attr('id', idSelector);
-      const ctx = canvas.node().getContext('2d');
-      const line = d3.line()
-                      .x(d => xScale(d[0]))
-                      .y(d => yScale(d[1]))
-                      .context(ctx);
-      ctx.beginPath(); // start a new path
-      line(data_to_draw);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = stroke;
-      ctx.stroke();
-
-      if (circle) {
-        chart.append('g')
-          .attr('class', `circle-${key}`)
-          .selectAll('circle')
-          .data(data_to_draw)
-          .enter()
-          .append('circle')
-          .attr('cx', d => xScale(d[0]))
-          .attr('cy', d => yScale(d[1]))
-          .attr('r', 4)
-          .attr('fill', 'none')
-          .attr('stroke', color)
-          .attr('stroke-width', 1.5)
-          .attr('stroke-linecap', 'round')
-          .on('mouseover', function(event, d) {
-            if (zoom.zoom_status === "none" && !cursor_dragging) {
-              d3.select(this).attr('r', 4).attr('fill', 'red');
-              drawLabel(chart, `(${d[0].toFixed(2)}, ${d[1].toFixed(2)})`, xScale(d[0])-40, yScale(d[1])-20);
-            }
-          })
-          .on('mouseout', function(event, d) {
-            d3.select(this).attr('r', 4).attr('fill', 'none');
-            chart.selectAll('.label').remove();
-          });
-      }
+    for ( const key in lineData) {
+      const uuid = lineData[key].uuid;
+      const yscale = (Object.hasOwn(customYScale, uuid)) ? customYScale[uuid] : yScale;
+      drawPath(key, x_domain, yscale);
     }
-    console.timeEnd('drawLinePath');
-    
     // add cursor
     const midX = xScale((x_domain[0] + x_domain[1]) / 2);
     const cursorRegion = chart.append('g').attr('class', 'cursor-region')
       .attr('transform', `translate(${midX}, 0)`);
-
     cursorRegion.append('line')
       .attr('x1', 0)
       .attr('y1', 0)
@@ -127,16 +109,7 @@ async function drawChart(x_domain, y_domain) {
         }
       });
       //add cursor label
-      for ( const key in data) {
-        //get data point y value
-        const dataList = data[key].data;
-        const {color} = data[key];
-        const xValue = xScale.invert(midX);
-        const yValue = interpolateYCoordinate(dataList, xValue);
-        const yCorrdinate = yScale(yValue);
-        drawLabel(cursorRegion, yValue.toFixed(5), -20, yCorrdinate, color, "cursor-label").attr('opacity', 0);
-      }
-      
+    updateCursor(midX);
 
     // add rect to conceal overflow path and circles
     chart.append('rect')
@@ -151,7 +124,6 @@ async function drawChart(x_domain, y_domain) {
       .attr('width', width)
       .attr('height', margin.bottom)
       .attr('fill', 'white');
-    console.time("otherJobs");
     // add x gridlines
     chart.append('g').attr('class', 'grid').selectAll('line')
       .data(xScale.ticks(12))
@@ -250,125 +222,152 @@ async function drawChart(x_domain, y_domain) {
       }
     }); 
     svg.on("keydown", (e) => {
-    if (e.key === 'f') {
+    if (e.ctrlKey && e.code === "KeyF") {
         // reset zoom
+        e.preventDefault();
         zoom.zoom_status = "none";
         zoom.zoom_start = [0, 0];
         zoom.zoom_end = [0, 0];
         zoom.zoom_axis = 0;
         updateChart();
     } else if (e.key === 'r') {
+      console.log("cursor region visible switch");
       if (cursor_visible) {
-        d3.select(chartContainer.value).select('.cursor-line')
-        .attr('opacity', 0).attr("class", "cursor-line");// Hide cursor line
-        d3.selectAll('.cursor-label').attr('opacity', 0); // Hide cursor label
         cursor_visible = false;
+        updateCursor(midX);    // dummy x corrdinate
       } else {
-        d3.select(chartContainer.value).select('.cursor-line')
-        .attr('opacity', 1).attr('class', "cursor-line cursor-col-resize"); // Show cursor line
-        d3.selectAll('.cursor-label').attr('opacity', 1); // Show cursor label
-        const x = d3.select('.cursor-region').attr('transform').match(/translate\(([^,]+),/)[1];
-        const x_corr = xScale.invert(x);
-        if (x_corr < x_domain[0] || x_corr > x_domain[1]) {
-          d3.select('.cursor-region')
-            .attr('x1', xScale((x_domain[0] + x_domain[1]) / 2))
-        }
         cursor_visible = true;
+        const x = d3.select('.cursor-region').attr('transform').match(/translate\(([^,]+),/)[1];
+        let x_corr = xScale.invert(x);
+        if (x_corr < x_domain[0] || x_corr > x_domain[1]) {
+          x_corr = x_domain[0] + (x_domain[1] - x_domain[0]) / 2;
+        }
+        updateCursor(xScale(x_corr));
       }
-    }});
+    } else if (e.key === 'f') {
+      fitView();
+    } else if (e.key === 'd' && e.ctrlKey) {
+      fitToEachView();
+    }
+  });
 
     const cursorDrag = (event) => {
       if (cursor_dragging) {
           const x = d3.pointer(event, svg.node())[0];
-          cursorRegion.attr('transform', `translate(${x-margin.left}, 0)`);
-          const xValue = xScale.invert(x - margin.left);
-          const labels = cursorRegion.selectAll(".cursor-label").nodes();
-          const labelText = cursorRegion.selectAll(".cursor-label").selectAll("text").nodes();
-          let i = 0;
-          for (const variable in data) {
-            const dataList = data[variable].data;
-            const yValue = interpolateYCoordinate(dataList, xValue); // interpolate y value
-            const yCorrdinate = yScale(yValue);
-            //drawLabel(cursorRegion, yValue.toFixed(5), -20, yCorrdinate, color, "cursor-label");
-            labels[i].setAttribute('transform', `translate(0, ${yCorrdinate})`);
-            labelText[i].innerHTML = yValue.toFixed(5);
-            i++;
-          }
+          updateCursor(x - margin.left);
       }
     }
-    console.timeEnd("otherJobs");
+    currentXDomain = x_domain;
+    currentYDomain = y_domain;
 }
 
 function onmouseup(event) {
     if (event.buttons  === 0) {
-        if (zoom.zoom_status === "panning") {
-            const [x_start, y_start] = zoom.zoom_start;
-            const [x_end, y_end] = zoom.zoom_end;
-            let x_domain, y_domain, x_1, y_1;
-            if (zoom.zoom_axis === 0) {
-                x_domain = [Math.min(x_start, x_end), Math.max(x_start, x_end)];
-                y_domain = calcDataYExtent(data);   //  x轴重新设置后，需要同步更新y_domain
-            } else {
-                [x_domain, y_1] = calcDataExtent(data);
-                y_domain = [Math.min(y_start, y_end), Math.max(y_start, y_end)];
-            }
-            d3.select(chartContainer.value).select('svg').remove(); // Clear previous chart
-            drawChart(x_domain, y_domain);
+      if (zoom.zoom_status === "panning") {
+        const [x_start, y_start] = zoom.zoom_start;
+        const [x_end, y_end] = zoom.zoom_end;
+        let x_domain, y_domain;
+        if (zoom.zoom_axis === 0) {
+            x_domain = [Math.min(x_start, x_end), Math.max(x_start, x_end)];
+            y_domain = currentYDomain;   //  x轴重新设置后，需要同步更新y_domain
+        } else {
+            x_domain = currentXDomain;
+            y_domain = [Math.min(y_start, y_end), Math.max(y_start, y_end)];
         }
-        // Reset zoom status
-        zoom.zoom_status = "none";
-        zoom.zoom_start = [0, 0];
-        zoom.zoom_end = [0, 0];
-        zoom.zoom_axis = 0;
-        svg.selectAll('.zoom-rect').remove();
+        d3.select(chartContainer.value).select('svg').remove(); // Clear previous chart
+        drawChart(x_domain, y_domain);
+      }
+      // Reset zoom status
+      zoom.zoom_status = "none";
+      zoom.zoom_start = [0, 0];
+      zoom.zoom_end = [0, 0];
+      zoom.zoom_axis = 0;
+      svg.selectAll('.zoom-rect').remove();
     }
     if (cursor_dragging) {
-        cursor_dragging = false;
-        d3.select(chartContainer.value).select('.cursor-line').attr("stroke", "red");
+      cursor_dragging = false;
+      d3.select(chartContainer.value).select('.cursor-line').attr("stroke", "red");
     }
 }
-
-
 
 function updateChart() {
   d3.select(chartContainer.value).select('svg').remove(); // Clear previous chart
-  ({data, width, height, update} = props);   
-  const xDomain = calcDataXExtent(data);
-  const yDomain = calcDataYExtent(data);
+  ({lineData, width, height, hasJob} = props);   
+  const xDomain = calcDataXExtent(lineData);
+  const yDomain = calcDataYExtent(lineData);
   console.time("drawChartAct");
-  drawChart(xDomain, yDomain); // Redraw the chart with new data
-  console.timeEnd("drawChartAct");
+  customYScale = {};
+  drawChart(xDomain, yDomain).then(() => {
+    console.timeEnd("drawChartAct");
+  });
+}
+
+function fitView() {
+  customYScale = {}; 
+  ({lineData, width, height, hasJob} = props);  
+  d3.select(chartContainer.value).select('svg').remove(); // Clear previous chart 
+  const xDomain = currentXDomain;
+  const yDomain = calcDataYextWithinX(lineData, xDomain);
+  console.time("fitViewDraw");
+  drawChart(xDomain, yDomain).then(() => {
+    console.timeEnd("fitViewDraw");
+  });
+} 
+
+function fitToEachView() {   // fit each line to its own y axis
+  customYScale = {};  // clear scale info first
+  ({lineData, width, height, hasJob} = props);  
+  const vars = Object.keys(lineData).reverse();
+  const innerHeight = height - margin.top - margin.bottom;
+  const stripeHeight = innerHeight / vars.length;
+  const xDomain = currentXDomain;   // 没有必要更新xScale
+  console.time('fitToEachView');
+  vars.forEach((varName, i) => {
+    // from top to bottom
+    console.time("calcYextWithinX");
+    const yDomain = calcYextWithinX(lineData[varName].pathData, xDomain, lineData[varName].time);
+    const uuid = lineData[varName].uuid;
+    const yRange = [innerHeight - stripeHeight * i, innerHeight - stripeHeight * (i + 1)];
+    console.timeEnd("calcYextWithinX");
+    customYScale[uuid] = d3.scaleLinear()
+      .domain(yDomain)
+      .range(yRange);
+    console.time("drawPath"+varName);
+    drawPath(varName, xDomain, customYScale[uuid]);
+    console.timeEnd("drawPath"+varName);
+  });
+  console.timeEnd('fitToEachView');
 }
 
 onMounted(() => {
-  console.time("initdrawChart");
   updateChart();
-  console.timeEnd("initdrawChart");
   window.addEventListener('contextmenu', function(event) {
       event.preventDefault();
   });
   window.addEventListener('mouseup', onmouseup);
 });
 
-watch(() => props.data, () => {
-  if (props.update) {
-    console.time("updateChart");
-    updateChart();          // 实际上是重新绘制图表
-    console.timeEnd("updateChart");
+watch(() => props.hasJob, (newVal, oldVal) => {
+  if (newVal) {   // has new job to do, start a new task
+    let job = jobQueue.value.shift();
+    while (job) {
+      processJob(job);
+      job = jobQueue.value.shift();
+    }
   }
-}, { deep: true });
+});
 
 onUnmounted(() => {
-  // 清理全局事件，防止内存泄露
   window.removeEventListener('mouseup', onmouseup);
 });
 
 
-function drawLabel(svg, textStr, x, y, color = "blue", classattr="label") {
+function drawLabel(svg, textStr, x, y, color = "blue", classattr="label", id=undefined) {
   const group = svg.append("g")
     .attr("transform", `translate(${x}, ${y})`)
     .attr("class", classattr)
     .attr("style", "user-select:none");
+  if (id) group.attr("id", id);
 
   const text = group.append("text")
     .text(textStr)
@@ -387,11 +386,75 @@ function drawLabel(svg, textStr, x, y, color = "blue", classattr="label") {
     .attr("stroke", color)
     .attr("rx", 8)
     .attr("ry", 8)
-    .attr("opacity", 0.5)
+    .attr("opacity", 0.8)
     .attr("dominant-baseline", "hanging");
   return group;
 }
 
+async function drawPath(variableName, xDomain, yScaleSpec=null) {
+  const {lineData} = props;  // updated lineData
+  if (variableName in lineData) {
+    document.body.style.cursor = "wait";
+    const {color, stroke, uuid, circle} = lineData[variableName];
+    yScaleSpec = (Object.hasOwn(customYScale, uuid))? customYScale[uuid]:yScaleSpec;
+    if (!yScaleSpec) yScaleSpec = yScale;
+    console.time("dataProcessing"+variableName);
+    let data_to_draw = lineData[variableName]["pathData"];
+    if (data_to_draw.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
+        data_to_draw = await downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]);
+    }
+    console.timeEnd("dataProcessing"+variableName);
+    d3.select("#path-" + uuid).remove();   
+    d3.select("#circle-" + uuid).remove();    
+    const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
+                      .attr('height', height-margin.bottom-margin.top)
+                      .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`)
+                      .attr('id', `path-${uuid}`);
+    const ctx = canvas.node().getContext('2d');
+    const line = d3.line()
+                    .x(d => xScale(d[0]))
+                    .y(d => yScaleSpec(d[1]))
+                    .context(ctx);
+    ctx.beginPath();
+    line(data_to_draw);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = stroke;
+    ctx.stroke();
+    if (circle) {
+      chart.append('g').attr("id", `circle-${uuid}`).selectAll('circle').data(data_to_draw).join('circle')
+        .attr('cx', d => xScale(d[0]))
+        .attr('cy', d => yScaleSpec(d[1]))
+        .attr('r', 3)
+        .attr('fill', color);
+    }
+    setTimeout(() => {
+      document.body.style.cursor = 'default';
+    }, 100);
+  } else {
+    console.log("variableName not found in data:", variableName);
+  }
+}
+
+function processJob (job) {
+  const key = Object.keys(job)[0];  // get the only key of the job object
+  console.log("got job key:", key, " with value:", job[key])
+  switch (key) {
+    case "addPath":
+    case "modifyPath":   {
+      const variableName = job[key];
+      drawPath(variableName, currentXDomain);
+    }
+    case "deletePath": {
+      const [variable, file] = job[key];
+      generateUUID(file, variable).then(uuid => {      // data is already deleted, so has to be regenerated
+        const id = `path-${uuid}`;
+        d3.select(`#${id}`).remove();
+        d3.select(`#circle-${uuid}`).remove();
+        d3.select(chartContainer.value).select(`#label-${uuid}`).remove();
+      })
+    }
+  }
+}
 </script>
 
 <style scoped>

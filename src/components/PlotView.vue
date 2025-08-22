@@ -10,8 +10,8 @@
         <h2 class="border-b-2 border-black mb-4 flex justify-start font-extrabold text-red-500 w-full">Graph Signals</h2>
         <div class="signal-container relative" ref="signalContainer"> 
             <div v-for="signal in Object.keys(plotData)" class="flex border-1 items-center justify-between overflow-auto hover:bg-gray-300 rounded-md">
-                <span class="pl-1 overflow-hidden text-blue-400">{{ signal }}</span>
-                <div class="flex justify-end p-1 items-center"><color-picker v-model:pureColor="plotData[signal].color" shape="circle"/>
+                <span class="pl-1 overflow-hidden" :style="{'color': plotData[signal].color}" :title="plotData[signal]['sigName']">{{ plotData[signal]["sigName"] }}</span>
+                <div class="flex justify-end p-1 items-center"><color-picker v-model:pureColor="plotData[signal].color" shape="circle" @pureColorChange="(e)=>handleColorChange(e, signal)"/>
                     <span @click="(e)=>handleLineClick(e, signal)"><svg class="w-8 h-5">
                         <line x1="0" y1="10" x2="100" y2="10" stroke="black" :stroke-width="plotData[signal].stroke"/>
                         <circle v-if="plotData[signal].circle" cx="16" cy="10" r="5" fill="none" stroke="black"/>
@@ -49,9 +49,17 @@ const signalContainer = ref(null);
 const lineSel = ref(null);
 let currentSelectedSignal = "" ;
 const lineWidth = ref([1, 1.5, 2, 2.5, 3.5]);
+const emit = defineEmits(["update-plot-style", "delete-signal"]);
 
 const handleDelete = (key) => {
+    const file = plotData.value[key].file;
     delete plotData.value[key];
+    emit("delete-signal", key, file);
+}
+
+const handleColorChange = (color, key) => {
+    console.log("color", color, key);
+    emit("update-plot-style", key);
 }
 
 const handleLineClick = (e, signal) => {
@@ -82,6 +90,7 @@ const handleLineChanged = (width, circle) => {
     if (currentSelectedSignal && currentSelectedSignal in plotData.value) {
         plotData.value[currentSelectedSignal].stroke = width;
         plotData.value[currentSelectedSignal].circle = circle;
+        emit('update-plot-style', currentSelectedSignal);
     }
     visible.value = false; // 关闭选择框
     window.removeEventListener('click', handleClickElsewhere); // 移除事件监听器
