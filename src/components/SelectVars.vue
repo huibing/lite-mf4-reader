@@ -1,5 +1,6 @@
 <template>
-  <div class="flex items-center border-1 border-gray-200 my-4 pl-1">
+  <div class="text-lg font-bold text-green-700 text-left p-2 border-b-1">SelectVars</div>
+  <div class="flex items-center border-1 border-gray-200 mb-4 pl-1">
     <div><font-awesome-icon icon="fa-solid fa-magnifying-glass" size="sm" style="color: #d9cef3;" /></div>
     <input class="focus:outline-1 w-full" type="text" placeholder="请输入变量名" @input="handleInput" />
   </div>
@@ -21,7 +22,7 @@
   <div class="flex justify-end w-full opacity-60" v-if="lines.length > 0"><span class="pr-4 text-xs">Total of {{ lines.length }} variables</span></div>
   <div class="flex justify-end w-full opacity-80" v-if="selectedLines.length > 0">
     <span class="pr-4 text-xs text-blue-900 font-black">Selected {{ selectedLines.length }} variables</span></div>
-  <div class="flex h-full items-end justify-center">
+  <div class="flex h-full items-end justify-center" v-if="selectedLines.length > 0">
     <button class="btn text-purple-800" @click="selectedLines=[]">清空选中行</button></div>
   
 </template>
@@ -133,7 +134,8 @@ watch(() => props.content, () => {
   margin-bottom: 10px;
   border-radius: 1em;
   font-size: 1em;
-  background-color: #96c4ff;
+  background-color: #f1f7ff;
+  box-shadow: inset  0 0 0 2px #f5f1f1ec;
 }
 
 .btn:hover {

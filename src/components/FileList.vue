@@ -1,12 +1,12 @@
 <template>
 <div class="flex flex-col w-full p-1 items-center justify-center"  v-if="fileList.length>0">
   <div v-for="(file, index) in fileList" class="flex justify-between m-1 items-center w-full h-10 rounded-sm
-               hover:bg-purple-300 shadow-md hover:shadow-xl " >
+               hover:bg-blue-500 shadow-md hover:shadow-xl group border-1" >
     <span class="text-lg rounded-xl" > [{{ index + 1 }}] </span>  
     <span @mousedown="(e)=>handleClick(e, file)" class="text-sm w-1/2 font-bold whitespace-nowrap overflow-hidden" :title=file > {{ getFileName(file) }} </span> 
     <div class="flex items-center">
-      <span @click="handleReplace(file)" class="opacity-30 hover:cursor-pointer hover:opacity-80 hover:-translate-y-0.5"> 
-        <font-awesome-icon icon="fa-solid fa-arrows-spin" size="sm" style="color: #000000;"/>
+      <span @click="handleReplace(file)" class="opacity-0 hover:cursor-pointer group-hover:opacity-50 hover:opacity-80 hover:-translate-y-0.5"> 
+        <font-awesome-icon icon="fa-solid fa-arrows-spin" size="sm" style="color: green;"/>
       </span>
       <svg class="w-5 h-5 text-gray-600 hover:text-red-500 cursor-pointer" viewBox="0 0 24 24" fill="none" @click="handleDelete(index, file)">
           <line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" stroke-width="2" />

@@ -7,7 +7,7 @@
 import { onMounted, ref, watch, onUnmounted } from 'vue';
 import * as d3 from 'd3';
 import { interpolateYCoordinate, generateUUID, calcDataXExtent, calcYextWithinX, downsampleParallel,
-  calcDataYExtent , isXinRange, findRange , downsamplePerPixel, calcDataYextWithinX } from '../utility';
+  calcDataYExtent , calcDataYextWithinX } from '../utility';
 
 let svg, xScale, yScale, currentXDomain, currentYDomain, chart;
 const props = defineProps({
@@ -18,7 +18,8 @@ const props = defineProps({
   yDomain: Array,    // [ymin, ymax]
   hasJob: Boolean
 });
-const jobQueue = defineModel();
+const cursorInfo = defineModel("cursorInfo");
+const jobQueue = defineModel("jobQueue");
 const labelXOff = 45;
 let customYScale = {};  // {variable: yScale}  将变量显示到单独的stripe上面
 
@@ -40,8 +41,11 @@ const updateCursor = (xOffset) => {
       d3.select(chartContainer.value).select('.cursor-line')
       .attr('opacity', 0).attr("class", "cursor-line");// Hide cursor line
       d3.selectAll('.cursor-label').attr('opacity', 0); // Hide cursor labels
+      d3.select(chartContainer.value).select(`.time-label`).attr('opacity', 0);
+      cursorInfo.value.visible = false;
     } else {
         const xValue = xScale.invert(xOffset);  
+        cursorInfo.value.time = xValue;  // Update cursor time
         const cursorRegion = d3.select(chartContainer.value).select('.cursor-region');
         cursorRegion.attr('transform', `translate(${xOffset}, 0)`);   // move the cursor region
         d3.select(chartContainer.value).select('.cursor-line')
@@ -61,9 +65,19 @@ const updateCursor = (xOffset) => {
             } else {
               drawLabel(cursorRegion, yValue.toFixed(5), labelXOff, yCoordination, color, "cursor-label", `label-${uuid}`);
             }
+            cursorInfo.value["value"][uuid] = yValue;
           } else {
             label.attr('opacity', 0);
+            cursorInfo.value["value"][uuid] = NaN;      // out of range; set to NaN
           }
+        }
+        // add time label at top
+        const timeLabel = d3.select(chartContainer.value).select(".time-label");
+        if (!timeLabel.empty()) {
+          timeLabel.attr('opacity', 1).attr('transform', `translate(${labelXOff}, ${15})`);
+          timeLabel.select('text').text(xValue.toFixed(5));
+        } else {
+          drawLabel(cursorRegion, xValue.toFixed(5), labelXOff, 15, 'black', "time-label");
         }
     }
 }
@@ -231,9 +245,9 @@ async function drawChart(x_domain, y_domain) {
         zoom.zoom_axis = 0;
         updateChart();
     } else if (e.key === 'r') {
-      console.log("cursor region visible switch");
       if (cursor_visible) {
         cursor_visible = false;
+        cursorInfo.value.visible = false;
         updateCursor(midX);    // dummy x corrdinate
       } else {
         cursor_visible = true;
@@ -243,6 +257,7 @@ async function drawChart(x_domain, y_domain) {
           x_corr = x_domain[0] + (x_domain[1] - x_domain[0]) / 2;
         }
         updateCursor(xScale(x_corr));
+        cursorInfo.value.visible = true;
       }
     } else if (e.key === 'f') {
       fitView();
@@ -337,10 +352,15 @@ function fitToEachView() {   // fit each line to its own y axis
     console.timeEnd("drawPath"+varName);
   });
   console.timeEnd('fitToEachView');
+  updateCursor(xScale(cursorInfo.value.time));
 }
 
 onMounted(() => {
   updateChart();
+  cursorInfo.value["time"] = 0;
+  cursorInfo.value["value"] = {};
+  cursorInfo.value["visible"] = false;
+
   window.addEventListener('contextmenu', function(event) {
       event.preventDefault();
   });
@@ -398,12 +418,10 @@ async function drawPath(variableName, xDomain, yScaleSpec=null) {
     const {color, stroke, uuid, circle} = lineData[variableName];
     yScaleSpec = (Object.hasOwn(customYScale, uuid))? customYScale[uuid]:yScaleSpec;
     if (!yScaleSpec) yScaleSpec = yScale;
-    console.time("dataProcessing"+variableName);
     let data_to_draw = lineData[variableName]["pathData"];
     if (data_to_draw.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
         data_to_draw = await downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]);
     }
-    console.timeEnd("dataProcessing"+variableName);
     d3.select("#path-" + uuid).remove();   
     d3.select("#circle-" + uuid).remove();    
     const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
@@ -444,14 +462,14 @@ function processJob (job) {
       const variableName = job[key];
       drawPath(variableName, currentXDomain);
     }
+    break;
     case "deletePath": {
-      const [variable, file] = job[key];
-      generateUUID(file, variable).then(uuid => {      // data is already deleted, so has to be regenerated
-        const id = `path-${uuid}`;
-        d3.select(`#${id}`).remove();
-        d3.select(`#circle-${uuid}`).remove();
-        d3.select(chartContainer.value).select(`#label-${uuid}`).remove();
-      })
+      const uuid = job[key];
+      console.log("got delete job for variable:", uuid);
+      const id = `path-${uuid}`;
+      d3.select(`#${id}`).remove();
+      d3.select(`#circle-${uuid}`).remove();
+      d3.select(chartContainer.value).select(`#label-${uuid}`).remove();
     }
   }
 }

@@ -29,7 +29,7 @@ export function calcDataYextWithinX(data, xDomain) {   // this function will cos
     let min = Infinity;
     let max = -Infinity;
     for (let k of keys) {
-      const [xMinIndex, xMaxIndex] = findRange(data[k].pathData.map(d => d[0]), xDomain);   // 找到x轴范围内的数据索引
+      const [xMinIndex, xMaxIndex] = findRange(data[k].time, xDomain);   // 找到x轴范围内的数据索引
       const yData = data[k].pathData.map(d => d[1]).slice(xMinIndex, xMaxIndex + 1);   // 提取y轴范围内的数据
       const yDomain = d3.extent(yData);   // 计算y轴范围
       if (yDomain[0] < min) min = yDomain[0];

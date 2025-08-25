@@ -1,16 +1,18 @@
 <!--
   File: MyComponent.vue
-  Author: Your Name
+  Author: BING LIU
   Description: 记录Plot中的变量信息 例如颜色、线条粗细等
   Created: 2025-08-05
 -->
 
 <template>
     <div class="flex flex-col w-full">
-        <h2 class="border-b-2 border-black mb-4 flex justify-start font-extrabold text-red-500 w-full">Graph Signals</h2>
+        <h2 class="border-b-2 border-black mb-4 flex justify-start font-extrabold text-red-500 w-full select-none">Graph Signals</h2>
         <div class="signal-container relative" ref="signalContainer"> 
-            <div v-for="signal in Object.keys(plotData)" class="flex border-1 items-center justify-between overflow-auto hover:bg-gray-300 rounded-md">
-                <span class="pl-1 overflow-hidden" :style="{'color': plotData[signal].color}" :title="plotData[signal]['sigName']">{{ plotData[signal]["sigName"] }}</span>
+            <div v-for="signal in Object.keys(plotData)" class="flex items-center justify-between overflow-auto hover:bg-gray-300 rounded-md">
+                <span class="pl-1 overflow-hidden text-left border-r-1 flex-1" :style="{'color': plotData[signal].color}" 
+                :title="plotData[signal]['sigName']+'\n'+plotData[signal]['file']">[{{ getFileIndex(plotData[signal]["file"]) }}]{{ plotData[signal]["sigName"] }}</span>
+                <span v-if="props.cursorInfo.visible"> {{ getVarValue(plotData[signal]["uuid"]) }}</span>
                 <div class="flex justify-end p-1 items-center"><color-picker v-model:pureColor="plotData[signal].color" shape="circle" @pureColorChange="(e)=>handleColorChange(e, signal)"/>
                     <span @click="(e)=>handleLineClick(e, signal)"><svg class="w-8 h-5">
                         <line x1="0" y1="10" x2="100" y2="10" stroke="black" :stroke-width="plotData[signal].stroke"/>
@@ -38,11 +40,22 @@
             </div>  
         </div>
     </div>
+    <div v-if="props.cursorInfo.visible" class="flex mt-4 mr-4 justify-end opacity-50 text-sm text-red-500">TIME: {{ props.cursorInfo.time.toFixed(4) }}</div>
 </template>
 
 <script setup>
 import { ref } from 'vue';
 const plotData = defineModel();
+const props = defineProps({
+  fileList: {
+    type: Array,
+    required: true
+  },
+  cursorInfo: {
+    type: Object,
+    required: true
+  },
+});
 const visible = ref(false);
 const position = ref({ x: 0, y: 0 });
 const signalContainer = ref(null);
@@ -52,9 +65,9 @@ const lineWidth = ref([1, 1.5, 2, 2.5, 3.5]);
 const emit = defineEmits(["update-plot-style", "delete-signal"]);
 
 const handleDelete = (key) => {
-    const file = plotData.value[key].file;
+    const uuid = plotData.value[key].uuid;
     delete plotData.value[key];
-    emit("delete-signal", key, file);
+    emit("delete-signal", uuid);
 }
 
 const handleColorChange = (color, key) => {
@@ -103,6 +116,17 @@ const handlerMouseleave = (e) => {
     }
 }
 
+const getFileIndex = (file) => {    // 获取文件在文件列表中的索引
+    return props.fileList.indexOf(file) + 1;
+}
+
+const getVarValue = (uuid) => {
+    if (props.cursorInfo.visible && uuid in props.cursorInfo.value && !Number.isNaN(props.cursorInfo.value[uuid])) {
+        return props.cursorInfo.value[uuid].toFixed(4);
+    } else {
+        return "-";
+    }
+}
 </script>
 
 <style scoped>

@@ -7,7 +7,7 @@ import YResizeable from './components/YResizeable.vue';
 import FancyButton from './components/FancyButton.vue';
 import PlotView from './components/PlotView.vue';
 
-import { ref , Transition } from 'vue';
+import { ref , Transition , onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -26,6 +26,7 @@ let progress = ref(0);
 let varList = ref([]);
 let selectedLines = ref([]);
 const fileList = ref(Array());
+const cursorInfo = ref({});
 let fileView = ref(true);
 let varView = ref(false);
 const plotView = ref(false);   // 需要一个更好的变量名称
@@ -119,6 +120,7 @@ const handleDragOver = (event) => {
 const switchView = (viewComponent) => {
   const allViews = {"fileView": fileView, "varView": varView, "plotView": plotView};
   let viewValue = allViews[viewComponent];
+  if (!showPanel.value) showPanel.value = true;
   if (viewValue.value){
     viewValue.value = false;
     showPanel.value = false;
@@ -152,7 +154,8 @@ const onDeleteFile = (file) => {
   updateInprogress.value = true; // 通知子组件停止更新画布
   for (const variable in lineData.value) {
     if (lineData.value[variable].file === file && variable !== "test") {
-      jobQueue.value.push({"deletePath": [lineData.value[variable]["sigName"], file]});
+      const uuid = lineData.value[variable].uuid;
+      jobQueue.value.push({"deletePath": uuid});
       delete lineData.value[variable];
     }
   }
@@ -172,9 +175,9 @@ const updatePlotStyle = (variable) => {
   }, 10); // 等待更新操作完成
 }
 
-const onDeleteSignal = (variable, file) => {
+const onDeleteSignal = (uuid) => {
   updateInprogress.value = true;
-  jobQueue.value.push({"deletePath": [variable, file]});
+  jobQueue.value.push({"deletePath": uuid});
   setTimeout(() => {
     updateInprogress.value = false;
   }, 10); // 等待删除操作完成
@@ -211,13 +214,22 @@ const onValueLoad = async (value, variable, file) => {
   }
 }
 
+onMounted(() => {
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("drop", (event) => {
+  if (!event.defaultPrevented) {
+    console.log("⚠ 未被处理的 drop 事件：", event.dataTransfer.getData('application/json'));
+    event.preventDefault(); // 阻止浏览器默认行为
+  }
+}, true); // true = 捕获阶段, 能拦截到最外层
+});
+
+
 </script>
 
 <template>
   <div class="flex">
-    <Transition mode="out-in" :name="transitionName">
-    <div v-if="showPanel" class="flex h-auto border-1">
-        <div class="flex flex-col justify-between w-10 border-r-2 ">
+    <div class="flex flex-col justify-between w-10 border-r-1 border-t-1 bg-slate-50">
           <div class="flex flex-col gap-4 justify-start items-center">
             <div @click="switchView('fileView')" tabindex="1" class="hover:cursor-pointer hover:border-1 hover:border-blue-500 focus:border-l-2" title="Files"> 
               <font-awesome-icon icon="fa-solid fa-file" style="color:#B197FC" size="lg"  /> </div>
@@ -227,10 +239,13 @@ const onValueLoad = async (value, variable, file) => {
               <font-awesome-icon icon="fa-solid fa-layer-group" size="lg" style="color: #f33939;" /> </div>
           </div>
           <div @click="switchPanelview" tabindex="1" class="hover:cursor-pointer hover:border-1 hover:border-blue-500 focus:border-l-2 mb-6" title="Collapse Panel"> 
-              <font-awesome-icon icon="fa-solid fa-angles-left" size="lg" style="color: #00D43B;" /> </div>
+              <font-awesome-icon v-if="showPanel" icon="fa-solid fa-angles-left" size="lg" style="color: #00D43B;" /> 
+              <font-awesome-icon v-else icon="fa-solid fa-angles-right" size="lg" style="color: #00D43B;" /> </div>
         </div>
+    <Transition mode="out-in" :name="transitionName">
+    <div v-if="showPanel" class="flex h-auto border-1">
     <YResizeable :minWidth="200" >
-      <div class="flex shadow-lg rounded-b-2xl w-full"><!-- 左侧面板 -->
+      <div class="flex shadow-lg rounded-b-2xl w-full bg-slate-50"><!-- 左侧面板 -->
         <div v-if="fileView" class="file flex flex-col items-center w-full">
           <div class="flex justify-start w-full border-b-1 mb-2"><div class="p-1 text-indigo-700 font-bold">Files</div></div>
             <FancyButton title="Add a mf4 file" :onClick="pickFile" class="w-30 h-10 flex justify-between m-1">
@@ -243,13 +258,11 @@ const onValueLoad = async (value, variable, file) => {
           <SelectVars  v-model="selectedLines" :content="varList" :fileList="fileList" @value-pre-read="onValueLoad"/>
         </div>
         <div v-if="plotView" class="flex flex-col w-full">
-          <PlotView v-model="lineData" @update-plot-style="updatePlotStyle" @delete-signal="onDeleteSignal"/>
+          <PlotView v-model="lineData" :fileList="fileList" :cursorInfo="cursorInfo" @update-plot-style="updatePlotStyle" @delete-signal="onDeleteSignal"/>
         </div>
       </div>
     </YResizeable>
     </div>
-    <div v-else class="hover:cursor hover:shadow-xl group flex items-center hover:bg-gray-200" @click="showPanel=true; transitionName='unfold';switchView('fileView')" title='Show panel'>
-      <font-awesome-icon icon="fa-solid fa-arrows-left-right" style="color: #0045bd;" size="xl" class="group-hover:border-1"/></div>
     </Transition>
     <div class="ml-3 pl-3 w-auto h-full z-0" @dragover="handleDragOver" @drop="handleDrop">
       <MultiLinePlot class="line-figure"
@@ -257,7 +270,7 @@ const onValueLoad = async (value, variable, file) => {
       :width="1400"
       :height="900"
       :hasJob="!updateInprogress"
-      v-model="jobQueue"/> 
+      v-model:jobQueue="jobQueue" v-model:cursorInfo="cursorInfo"/> 
     </div>
   </div>
 </template>
@@ -284,7 +297,7 @@ const onValueLoad = async (value, variable, file) => {
 }
 
 .fold-enter-from{
-  opacity: 0;
+  opacity: 100;
 }
 
 .fold-leave-to {
