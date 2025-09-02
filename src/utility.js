@@ -144,13 +144,65 @@ function upperBound(arr, target) {
   return left; // 第一个 > target 的位置
 }
 
-export function findRange(arr, xDomain) {
+export function findRangeAuto(arr, xDomain) {
   const start = lowerBound(arr, xDomain[0]);
-  const end = upperBound(arr, xDomain[1]) - 1;
+  const end = upperBound(arr.slice(start), xDomain[1]) - 1;
   if (start <= end && start < arr.length) {
     return [start, end]; // 索引范围
   }
   return [0, arr.length - 1]; // 默认返回整个数组避免错误
+}
+
+export function findRange(arr, xDomain) {
+  const n = arr.length;
+  if (n === 0) return [0, -1];
+  if (n === 1) return [0, 0];
+
+  const [xmin, xmax] = xDomain;
+
+  // === Step 1: 检查是不是等差数列 ===
+  const d1 = arr[1] - arr[0];
+  let isArithmetic = true;
+  // 只抽查几个点，避免全数组 O(n) 检查
+  const sampleCount = Math.min(n - 1, 5);  
+  for (let i = 1; i <= sampleCount; i++) {
+    if ( floatEqualEst(arr[i] - arr[i - 1], d1)) {
+      isArithmetic = false;
+      break;
+    }
+  }
+
+  if (isArithmetic) {
+    // === Step 2: 直接用公式计算 O(1) ===
+    console.log("Arithmetic progression detected.");
+    let start = Math.ceil((xmin - arr[0]) / d1);
+    let end   = Math.floor((xmax - arr[0]) / d1);
+
+    if (start < 0) start = 0;
+    if (end >= n) end = n - 1;
+
+    if (start <= end) return [start, end];
+    return [0, n - 1];
+  }
+
+  // === Step 3: 回退到二分查找 ===
+  const start = lowerBound(arr, xmin);
+  let end = upperBound(arr, xmax) - 1;
+  if (end >= n) end = n - 1;
+
+  if (start <= end) return [start, end];
+  return [0, n - 1];
+}
+
+function floatEqualEst(a, b) {  // 近似相等即可，用于浮点数比较
+  if (a === b) return true;
+  if (a === 0) {
+    return Math.abs(b) < 1e-4;
+  } else if (b === 0) {
+    return Math.abs(a) < 1e-4;
+  } else {
+    return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b)) < 1e-3;
+  }
 }
 
 // 按像素列聚合：每个 x 像素保留 yMin、yMax
@@ -246,4 +298,13 @@ function flattenPoints(points) {
     flat[i * 2 + 1] = points[i][1];
   }
   return flat;
+}
+
+export function downsampleQuick(points, width) {  // 快速计算画图
+  const step = Math.floor(points.length / (width - 1)) ;   // 每个像素对应的x轴范围
+  const reduced = []; // 每个像素对应的y轴范围
+  for (let i = 0; i < points.length; i+=step) {
+    reduced.push([points[i][0], points[i][1]]);  // quick sampling for initial display only, will be replaced by downsampleParallel later
+  }
+  return reduced;
 }

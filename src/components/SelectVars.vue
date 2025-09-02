@@ -14,6 +14,7 @@
       @click="toggleSelection(line)"
       draggable="true"
       @dragstart="handleDragStart"
+      @dblclick="handleDoubleClick(line)"
     >
       <span class="w-3/4 text-left overflow-hidden">{{ line[0] }}</span> <span :title="line[1]">|[{{ getFileIndex(line[1]) }}]</span>
     </div>
@@ -42,7 +43,7 @@ const props = defineProps({
     required: true
   }
 });
-const emit = defineEmits(['value-pre-read']);
+const emit = defineEmits(['value-pre-read', 'add-signal']);
 const lines = ref([]);
 onMounted(() => {
   lines.value = props.content;
@@ -102,6 +103,10 @@ const getFileIndex = (file) => {
   return props.fileList.findIndex(f => getFileName(f) === fileName) + 1;
 }
 
+const handleDoubleClick = (line) => {
+  emit('add-signal', line[0], line[1]);
+}
+
 watch(() => props.content, () => {
   lines.value = props.content;
 }, { deep: true });
@@ -111,6 +116,7 @@ watch(() => props.content, () => {
 .multi-line-selectable {
   border: 2px solid #1d1a1a;
   max-height: 600px; /* 固定高度 */
+  min-height: 600px; /* 固定高度 */
   overflow-y: auto;  /* 超出时出现滚动条 */
 }
 

@@ -6,7 +6,7 @@
 <script setup>
 import { onMounted, ref, watch, onUnmounted } from 'vue';
 import * as d3 from 'd3';
-import { interpolateYCoordinate, generateUUID, calcDataXExtent, calcYextWithinX, downsampleParallel,
+import { interpolateYCoordinate, downsampleQuick, calcDataXExtent, calcYextWithinX, downsampleParallel, findRange,
   calcDataYExtent , calcDataYextWithinX } from '../utility';
 
 let svg, xScale, yScale, currentXDomain, currentYDomain, chart;
@@ -34,6 +34,7 @@ let { lineData, width, height, hasJob} = props;
 let cursor_visible = false;
 let cursor_dragging = false;
 const margin = { top: 30, right: 10, bottom: 20, left: 30 };
+const emit = defineEmits(["open-context-menu"]);
 
 const updateCursor = (xOffset) => {
     ({ lineData, width, height, hasJob} = props);
@@ -74,10 +75,10 @@ const updateCursor = (xOffset) => {
         // add time label at top
         const timeLabel = d3.select(chartContainer.value).select(".time-label");
         if (!timeLabel.empty()) {
-          timeLabel.attr('opacity', 1).attr('transform', `translate(${labelXOff}, ${15})`);
+          timeLabel.attr('opacity', 1).attr('transform', `translate(${0}, ${-10})`);
           timeLabel.select('text').text(xValue.toFixed(5));
         } else {
-          drawLabel(cursorRegion, xValue.toFixed(5), labelXOff, 15, 'black', "time-label");
+          drawLabel(cursorRegion, xValue.toFixed(4), 0, -10, 'black', "time-label");
         }
     }
 }
@@ -124,6 +125,7 @@ async function drawChart(x_domain, y_domain) {
       });
       //add cursor label
     updateCursor(midX);
+    cursorInfo.value.time = xScale.invert(midX);
 
     // add rect to conceal overflow path and circles
     chart.append('rect')
@@ -291,6 +293,8 @@ function onmouseup(event) {
         }
         d3.select(chartContainer.value).select('svg').remove(); // Clear previous chart
         drawChart(x_domain, y_domain);
+      } else if (zoom.zoom_status === "start") {
+        emit("open-context-menu", event);  // 并没有触发zoom   打开右键菜单
       }
       // Reset zoom status
       zoom.zoom_status = "none";
@@ -357,7 +361,6 @@ function fitToEachView() {   // fit each line to its own y axis
 
 onMounted(() => {
   updateChart();
-  cursorInfo.value["time"] = 0;
   cursorInfo.value["value"] = {};
   cursorInfo.value["visible"] = false;
 
@@ -414,42 +417,60 @@ function drawLabel(svg, textStr, x, y, color = "blue", classattr="label", id=und
 async function drawPath(variableName, xDomain, yScaleSpec=null) {
   const {lineData} = props;  // updated lineData
   if (variableName in lineData) {
-    document.body.style.cursor = "wait";
     const {color, stroke, uuid, circle} = lineData[variableName];
     yScaleSpec = (Object.hasOwn(customYScale, uuid))? customYScale[uuid]:yScaleSpec;
     if (!yScaleSpec) yScaleSpec = yScale;
-    let data_to_draw = lineData[variableName]["pathData"];
-    if (data_to_draw.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
+    let dataRaw = lineData[variableName]["pathData"];
+    console.time("dataSelect");
+    console.time("findRange");
+    const xRange = findRange(lineData[variableName]["time"], xDomain);
+    console.timeEnd("findRange");
+    let data_to_draw = Array.from({length: xRange[1]-xRange[0]}, () => []);
+    let index = 0;
+    for (let i = xRange[0]; i < xRange[1]; i++) {
+      data_to_draw[index++] = dataRaw[i];
+    }
+    console.log("data_to_draw length:", data_to_draw.length, " from original length:", dataRaw.length);
+    console.timeEnd("dataSelect");
+    console.time("downsample");
+    if (data_to_draw.length > (width-margin.left-margin.right) * 10) {   // too many points, use quick downsample to increase performance
+        downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]).then((dataRes) => {  // 后台并行采样
+          pathreDraw(uuid, color, stroke, dataRes, circle, xScale, yScaleSpec);   // 绘制平滑曲线
+        })
+        data_to_draw = downsampleQuick(data_to_draw, (width-margin.left-margin.right));  // 快速采样显示  后续再使用并行采样
+    } else if (data_to_draw.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
         data_to_draw = await downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]);
-    }
-    d3.select("#path-" + uuid).remove();   
-    d3.select("#circle-" + uuid).remove();    
-    const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
-                      .attr('height', height-margin.bottom-margin.top)
-                      .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`)
-                      .attr('id', `path-${uuid}`);
-    const ctx = canvas.node().getContext('2d');
-    const line = d3.line()
-                    .x(d => xScale(d[0]))
-                    .y(d => yScaleSpec(d[1]))
-                    .context(ctx);
-    ctx.beginPath();
-    line(data_to_draw);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = stroke;
-    ctx.stroke();
-    if (circle) {
-      chart.append('g').attr("id", `circle-${uuid}`).selectAll('circle').data(data_to_draw).join('circle')
-        .attr('cx', d => xScale(d[0]))
-        .attr('cy', d => yScaleSpec(d[1]))
-        .attr('r', 3)
-        .attr('fill', color);
-    }
-    setTimeout(() => {
-      document.body.style.cursor = 'default';
-    }, 100);
+    } else {} // no need to downsample
+    console.timeEnd("downsample");
+    pathreDraw(uuid, color, stroke, data_to_draw, circle, xScale, yScaleSpec);
   } else {
     console.log("variableName not found in data:", variableName);
+  }
+}
+
+const pathreDraw = (uuid, color, stroke, pathData, circle, xScalein, yScalein) => {   
+  d3.select("#path-" + uuid).remove();   
+  d3.select("#circle-" + uuid).remove();    
+  const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
+                    .attr('height', height-margin.bottom-margin.top)
+                    .attr('style', `position: absolute; left: ${margin.left}px; top: ${margin.top}px; z-index: 0;`)
+                    .attr('id', `path-${uuid}`);
+  const ctx = canvas.node().getContext('2d');
+  const line = d3.line()
+                  .x(d => xScalein(d[0]))
+                  .y(d => yScalein(d[1]))
+                  .context(ctx);
+  ctx.beginPath();
+  line(pathData);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = stroke;
+  ctx.stroke();
+  if (circle) {
+    chart.append('g').attr("id", `circle-${uuid}`).selectAll('circle').data(pathData).join('circle')
+      .attr('cx', d => xScalein(d[0]))
+      .attr('cy', d => yScalein(d[1]))
+      .attr('r', 3)
+      .attr('fill', color);
   }
 }
 
@@ -471,6 +492,28 @@ function processJob (job) {
       d3.select(`#circle-${uuid}`).remove();
       d3.select(chartContainer.value).select(`#label-${uuid}`).remove();
     }
+    break;
+    case "redraw": {
+      updateChart();
+      if (cursor_visible) {
+        console.log("cursor time:", cursorInfo.value.time);
+        updateCursor(xScale(cursorInfo.value.time));
+      }
+    } break;
+    case "fitToEachview": {
+      fitToEachView();
+    } break;
+    case "cursorSwitch": {
+      cursor_visible = !cursor_visible;
+      if (cursor_visible) {
+        cursorInfo.value.visible = true;
+        console.log("cursor time:", cursorInfo.value.time);
+        updateCursor(xScale(cursorInfo.value.time));
+      } else {
+        cursorInfo.value.visible = false;
+        updateCursor(xScale(cursorInfo.value.time)); // hide cursor
+      };
+    } break;
   }
 }
 </script>

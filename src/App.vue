@@ -6,6 +6,7 @@ import FileList from './components/FileList.vue';
 import YResizeable from './components/YResizeable.vue';
 import FancyButton from './components/FancyButton.vue';
 import PlotView from './components/PlotView.vue';
+import ContextMenu from './components/ContextMenu.vue';
 
 import { ref , Transition , onMounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
@@ -20,7 +21,7 @@ const lineData = ref({"test": {"pathData": [[0, 0], [1, 1], [2, 4], [3, 9], [4, 
         "color": colorPalette[colorIndex++ % colorPalette.length], "circle": false, "file": "D:\\dummyfile.mf4", "sigName": "test", "time": [0,1,2,3,4,5,6,7,8,9], 
         "uuid": "45fbf88f-e4cb-4a24-b45c-dd583ff726a5", "x_domain": [0, 9], "y_domain": [0, 82]}}); // 初始化数据
 
-const updateInprogress = ref(false);   // tell the graph not to draw while we are updating
+const updateInprogress = ref(false);   // tell the graph not to draw while we are updating data
 let dispProgress = ref(false);
 let progress = ref(0);
 let varList = ref([]);
@@ -29,13 +30,17 @@ const fileList = ref(Array());
 const cursorInfo = ref({});
 let fileView = ref(true);
 let varView = ref(false);
-const plotView = ref(false);   // 需要一个更好的变量名称
+const plotView = ref(false);  
 let showPanel = ref(true);
 let transitionName = ref('fold');
 // the sequence of jobs to be executed  e.g. {"redraw": true} {"addPath": ["variableName"]} {"deletePath": [variableName]} {"modifyPath": [variableName]} 
 const jobQueue = ref([]);  
 let tempDataHolder = {}; 
 let varToAddQueue = [];
+const contextMenuItems = ref([{"label": "刷新", "action": "refresh", "shortCut": "CTRL+F"}, 
+                        {"label": "条状显示", "action": "fitToEachview", "shortCut": "CTRL+D"},
+                        {"label": "Cursor", "action": "cursorSwitch", "shortCut": "R"},]);
+const contextMenu = ref(null);
 
 const readFile = (file) => {
   if (file) {
@@ -77,13 +82,13 @@ const genDataKey = (variable, file) => {
 const addData = async (raw, variable, file) => {
   const [data, time] = raw;
   const pathData = data.map((v, index)=>[time[index], v]);
-  const x_domain = [time[0], time[time.length - 1]];
+  const x_domain = [time[0], time[ - 1]];
   const y_domain = d3.extent(data);
   const id = await generateUUID(file, variable);    // 生成唯一id
   lineData.value[genDataKey(variable, file)] = {"pathData": pathData, "sigName": variable,
                                 "color": colorPalette[colorIndex++ % colorPalette.length], 
                                 "stroke": 1.5, "circle": false, "x_domain": x_domain, "y_domain": y_domain,
-                                "file": file, "uuid": id, "time": time};
+                                "file": file, "uuid": id, "time": new Float32Array(time)}; // use float32Array for better performance
   jobQueue.value.push({"addPath": genDataKey(variable, file)});
 }
 
@@ -214,6 +219,44 @@ const onValueLoad = async (value, variable, file) => {
   }
 }
 
+const onAddSignal = (variable, file) => {
+  updateInprogress.value = true;
+  document.body.style.cursor = "wait";
+  invoke("get_mf4_channel_data", {"mf4Path": file, "channelName": variable})   // start to read data from mf4 file when drag start
+          .then(res => {
+            addData(res, variable, file);
+          })
+          .catch(err => {
+            console.error(err);})
+          .finally(() => {
+            setTimeout(() => {
+              updateInprogress.value = false;
+            }, 20); // 等待更新操作完成
+            document.body.style.cursor = "default";});
+}
+
+const openContextMenu = (event) => {
+  contextMenu.value.open(event);
+}
+const closeMenu = (event) => {
+  contextMenu.value.close();
+}
+
+const onContextMenuSelect = (item) => {
+  console.log("context menu select:", item);
+  updateInprogress.value = true;
+  if (item.action === "refresh") {
+    jobQueue.value.push({"redraw": true});
+  } else if (item.action === "fitToEachview") {
+    jobQueue.value.push({"fitToEachview": true});
+  } else if (item.action === "cursorSwitch") {
+    jobQueue.value.push({"cursorSwitch": true});
+  } 
+  setTimeout(() => {
+    updateInprogress.value = false;
+  }, 20); // 等待更新操作完成
+}
+
 onMounted(() => {
   document.addEventListener("dragover", (e) => e.preventDefault());
   document.addEventListener("drop", (event) => {
@@ -255,7 +298,7 @@ onMounted(() => {
           <FileList v-model="fileList" @delete-file="onDeleteFile" @add-file="readFile(file)" />
         </div>
         <div v-if="varView" class="flex flex-col w-full">
-          <SelectVars  v-model="selectedLines" :content="varList" :fileList="fileList" @value-pre-read="onValueLoad"/>
+          <SelectVars  v-model="selectedLines" :content="varList" :fileList="fileList" @value-pre-read="onValueLoad" @add-signal="onAddSignal"/>
         </div>
         <div v-if="plotView" class="flex flex-col w-full">
           <PlotView v-model="lineData" :fileList="fileList" :cursorInfo="cursorInfo" @update-plot-style="updatePlotStyle" @delete-signal="onDeleteSignal"/>
@@ -264,14 +307,15 @@ onMounted(() => {
     </YResizeable>
     </div>
     </Transition>
-    <div class="ml-3 pl-3 w-auto h-full z-0" @dragover="handleDragOver" @drop="handleDrop">
+    <div class="ml-3 pl-3 w-auto h-full z-0" @dragover="handleDragOver" @drop="handleDrop" @click="closeMenu">
       <MultiLinePlot class="line-figure"
       :lineData=lineData
       :width="1400"
       :height="900"
       :hasJob="!updateInprogress"
-      v-model:jobQueue="jobQueue" v-model:cursorInfo="cursorInfo"/> 
+      v-model:jobQueue="jobQueue" v-model:cursorInfo="cursorInfo" @open-context-menu="openContextMenu"/> 
     </div>
+    <ContextMenu ref="contextMenu" :items="contextMenuItems" @select="onContextMenuSelect"></ContextMenu>
   </div>
 </template>
 
