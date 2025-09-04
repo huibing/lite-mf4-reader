@@ -1,5 +1,6 @@
 use mf4_parse::{Mf4Wrapper, DataValue};
 use tauri::Emitter;
+use tauri::ipc::Response;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -37,7 +38,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_mf4_channels, get_mf4_channel_data])
+        .invoke_handler(tauri::generate_handler![get_mf4_channels, get_mf4_channel_data, get_mf4_channel_time])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -59,16 +60,40 @@ fn get_mf4_channels(mf4_path: &str, app: tauri::AppHandle, cache: tauri::State<F
 
 
 #[tauri::command]
-fn get_mf4_channel_data(mf4_path: &str, channel_name: &str, cache: tauri::State<FileCache>) -> Result<(Vec<f64>, Vec<f64>), String> {
-    let start = Instant::now();
+fn get_mf4_channel_data(mf4_path: &str, channel_name: &str, cache: tauri::State<FileCache>) -> Response {
     let mf4_obj = cache.inner.lock().unwrap();
     if let Some(mf4) = mf4_obj.get(mf4_path) {
-       let (data, time) = get_channel_data(mf4, channel_name)?;
-       let elapsed = start.elapsed();
-       println!("Elapsed: {:?}", elapsed);
-        Ok((data, time))
+       let data = mf4.get_channel_data(channel_name).unwrap();
+       if data.is_num() {
+          let data_f64: Vec<f64> = data.try_into().unwrap();
+          let data_bytes = unsafe {
+          std::slice::from_raw_parts(
+            data_f64.as_ptr() as *const u8,
+            data_f64.len() * std::mem::size_of::<f64>(),).to_vec()
+            };
+        Response::new(data_bytes)
+       } else { Response::new(Vec::new())  }
     } else {
-      Err(String::from("File not found in cache, please load file first"))
+        Response::new(Vec::new())   // empty bytes for error
+    }
+}
+
+#[tauri::command]
+fn get_mf4_channel_time(mf4_path: &str, channel_name: &str, cache: tauri::State<FileCache>) -> Response {
+    let mf4_obj = cache.inner.lock().unwrap();
+    if let Some(mf4) = mf4_obj.get(mf4_path) {
+       let time = mf4.get_channel_master_data(channel_name).unwrap();
+       if let DataValue::REAL(time) = time {
+          let time_bytes = unsafe {
+          std::slice::from_raw_parts(
+          time.as_ptr() as *const u8,
+          time.len() * std::mem::size_of::<f64>(),
+        ).to_vec()
+        };
+        Response::new(time_bytes)
+       } else { Response::new(Vec::new())  }
+    } else {
+        Response::new(Vec::new())   // empty bytes for error
     }
 }
 

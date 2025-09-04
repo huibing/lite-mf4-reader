@@ -1,5 +1,5 @@
 <template>
-    <div class="flex justify-stretch" :style="{ width: panelWidth + 'px' }">
+    <div class="flex justify-stretch" :style="{ width: panelWidth + 'px' }" ref="panel">
         <slot></slot>
         <div class="flex w-2 h-full bg-gray-200 hover:cursor-col-resize opacity-20 hover:opacity-80 items-center select-none" 
         @mousedown="handleMouseDown" 
@@ -15,6 +15,7 @@ import { ref } from 'vue';
 
 const panelWidth = ref(300);
 const draggable = ref(false);
+const panel = ref(null);
 const props = defineProps({
     minWidth: {
         type: Number,
@@ -23,7 +24,8 @@ const props = defineProps({
 });
 const handleMouseMove = (event) => {
     if (draggable.value) {
-        panelWidth.value = Math.max(event.clientX, props.minWidth);
+        const leftX = panel.value.getBoundingClientRect().left;
+        panelWidth.value = Math.max(event.clientX-leftX, props.minWidth);
     }
 }
 

@@ -30,7 +30,7 @@ export function calcDataYextWithinX(data, xDomain) {   // this function will cos
     let max = -Infinity;
     for (let k of keys) {
       const [xMinIndex, xMaxIndex] = findRange(data[k].time, xDomain);   // 找到x轴范围内的数据索引
-      const yData = data[k].pathData.map(d => d[1]).slice(xMinIndex, xMaxIndex + 1);   // 提取y轴范围内的数据
+      const yData = data[k].pathData.subarray(xMinIndex, xMaxIndex + 1);   // 提取y轴范围内的数据
       const yDomain = d3.extent(yData);   // 计算y轴范围
       if (yDomain[0] < min) min = yDomain[0];
       if (yDomain[1] > max) max = yDomain[1];
@@ -38,10 +38,9 @@ export function calcDataYextWithinX(data, xDomain) {   // this function will cos
     return [min, max];
 }
 
-export function calcYextWithinX(arr, xDomain, timeArray) {
+export function calcYextWithinX(yData, xDomain, timeArray) {
   const [xMinIndex, xMaxIndex] = findRange(timeArray, xDomain);
-  const yData = arr.map(d => d[1]).slice(xMinIndex, xMaxIndex + 1);
-  return d3.extent(yData);
+  return d3.extent(yData.subarray(xMinIndex, xMaxIndex + 1));
 }
 
 export function generateColorWheelColors(count = 12) {
@@ -53,28 +52,28 @@ export function generateColorWheelColors(count = 12) {
   return colors;
 }
 
-export function interpolateYCoordinate(data, xValue) {
-  const dataLen = data.length;
+export function interpolateYCoordinate(xData, yData, xValue) {
+  const dataLen = xData.length;
   if (dataLen === 0) return null;
-  if (dataLen === 1) return y[0];
+  if (dataLen === 1) return yData[0];
 
-  // assuming data is sorted by xValue
-  if (xValue <= data[0][0]) {
-    return data[0][1];
+  // 假设 xData 已按升序排列
+  if (xValue <= xData[0]) {
+    return yData[0];
   }
-  if (xValue >= data[dataLen - 1][0]) {
-    return data[dataLen - 1][1];
+  if (xValue >= xData[dataLen - 1]) {
+    return yData[dataLen - 1];
   }
 
   // 二分查找区间
   let low = 0;
   let high = dataLen - 1;
   while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const midX = data[mid][0];
+    const mid = (low + high) >> 1; // 位运算比 Math.floor 快
+    const midX = xData[mid];
 
     if (midX === xValue) {
-      return data[mid][1]; // 刚好匹配
+      return yData[mid]; // 精确匹配
     } else if (midX < xValue) {
       low = mid + 1;
     } else {
@@ -82,11 +81,11 @@ export function interpolateYCoordinate(data, xValue) {
     }
   }
 
-  // high 是左端点索引，low 是右端点索引
-  const x0 = data[high][0];
-  const y0 = data[high][1];
-  const x1 = data[low][0];
-  const y1 = data[low][1];
+  // 插值区间: high 在左，low 在右
+  const x0 = xData[high];
+  const y0 = yData[high];
+  const x1 = xData[low];
+  const y1 = yData[low];
 
   // 线性插值
   return y0 + (y1 - y0) * (xValue - x0) / (x1 - x0);
@@ -232,31 +231,32 @@ export function downsamplePerPixel(points, width, xScale) {
 }
 
 
-export async function downsampleParallel(points, width, x0, x1, maxWorkers) {   // 并行计算
+export async function downsampleParallel(yData, xData, width, x0, x1, maxWorkers) {   // 并行计算
   // 动态选择 Worker 数：默认 CPU 核数，至少 1
   const numWorkers = Math.min(
     maxWorkers || navigator.hardwareConcurrency || 4,
-    points.length // 不要超过点数
+    yData.length // 不要超过点数
   );
 
-  const chunkSize = Math.ceil(points.length * 2 / numWorkers);
+  const chunkSize = Math.ceil(yData.length / numWorkers);
   const workers = [];
   const promises = [];
-  const totalChunks = flattenPoints(points);
+  const totalChunks = yData;
 
   for (let i = 0; i < numWorkers; i++) {
     const worker = new Worker("downsampleWorker.js");
     workers.push(worker);
-    const start = i * chunkSize * 2;
-    const end = Math.min(totalChunks.length, (i + 1) * chunkSize * 2);
+    const start = i * chunkSize;
+    const end = Math.min(totalChunks.length, (i + 1) * chunkSize);
     const chunk = totalChunks.subarray(start, end); // 不拷贝，subarray 是 view
+    const timeChunk = xData.subarray(start, end);
     promises.push(new Promise(resolve => {
       worker.onmessage = e => {
         resolve(e.data);
         worker.terminate();
       };
     }));
-    worker.postMessage({ points: chunk, width, x0, x1 });
+    worker.postMessage({ chunk, timeChunk, width, x0, x1 });
   }
 
   const results = await Promise.all(promises);
@@ -290,21 +290,11 @@ export async function downsampleParallel(points, width, x0, x1, maxWorkers) {   
   return reduced;
 }
 
-
-function flattenPoints(points) {
-  const flat = new Float64Array(points.length * 2);
-  for (let i = 0; i < points.length; i++) {
-    flat[i * 2] = points[i][0];
-    flat[i * 2 + 1] = points[i][1];
-  }
-  return flat;
-}
-
-export function downsampleQuick(points, width) {  // 快速计算画图
+export function downsampleQuick(points, xData, width) {  // 快速计算画图
   const step = Math.floor(points.length / (width - 1)) ;   // 每个像素对应的x轴范围
   const reduced = []; // 每个像素对应的y轴范围
   for (let i = 0; i < points.length; i+=step) {
-    reduced.push([points[i][0], points[i][1]]);  // quick sampling for initial display only, will be replaced by downsampleParallel later
+    reduced.push([xData[i], points[i]]);  // quick sampling for initial display only, will be replaced by downsampleParallel later
   }
   return reduced;
 }

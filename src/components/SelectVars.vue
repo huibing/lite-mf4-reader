@@ -65,19 +65,17 @@ function isSelected(line) {
   return selectedLines.value.includes(line)
 }
 
-function handleDragStart(event) {
+async function handleDragStart(event) {
   const payload = selectedLines.value.length > 0
     ? selectedLines.value : [];
   const payloadString = payload.map(line => [line[0], line[1]]);
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData('application/json', JSON.stringify(payloadString));
-  payload.forEach(variable => {
-    invoke("get_mf4_channel_data", {"mf4Path": variable[1], "channelName": variable[0]})   // start to read data from mf4 file when drag start
-            .then(res => {
-              emit('value-pre-read', res, variable[0], variable[1]);
-            }).catch(err => {
-              console.error(err);}) 
-  });
+  for (const variable of payload) {
+    const data = await invoke("get_mf4_channel_data", {"mf4Path": variable[1], "channelName": variable[0]});
+    const timeData = await invoke("get_mf4_channel_time", {"mf4Path": variable[1], "channelName": variable[0]});
+    emit('value-pre-read', data, timeData, variable[0], variable[1]);
+  };
 }
 
 const handleInput = (event) => {

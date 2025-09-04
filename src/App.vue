@@ -17,9 +17,10 @@ import * as d3 from 'd3';
 
 const colorPalette = generateColorWheelColors(7);
 let colorIndex = 0;
-const lineData = ref({"test": {"pathData": [[0, 0], [1, 1], [2, 4], [3, 9], [4, 16], [5, 25], [6, 36], [7, 49], [8, 64], [9, 81]], "stroke": 1.5, 
-        "color": colorPalette[colorIndex++ % colorPalette.length], "circle": false, "file": "D:\\dummyfile.mf4", "sigName": "test", "time": [0,1,2,3,4,5,6,7,8,9], 
-        "uuid": "45fbf88f-e4cb-4a24-b45c-dd583ff726a5", "x_domain": [0, 9], "y_domain": [0, 82]}}); // 初始化数据
+const lineData = ref({"test": {"pathData": new Float64Array([0,1,4,9,16,25,36,49,64,81]), "stroke": 1.5, 
+        "color": colorPalette[colorIndex++ % colorPalette.length], "circle": false, "file": "D:\\dummyfile.mf4", 
+        "sigName": "test", "time": new Float64Array([0,1,2,3,4,5,6,7,8,9]), 
+        "uuid": "45fbf88f-e4cb-4a24-b45c-dd583ff726a5", "x_domain": [0, 9], "y_domain": [0, 82]}}); // 初始化测试数据
 
 const updateInprogress = ref(false);   // tell the graph not to draw while we are updating data
 let dispProgress = ref(false);
@@ -79,16 +80,16 @@ const genDataKey = (variable, file) => {
   return `${variable}_${file}`;
 }
 
-const addData = async (raw, variable, file) => {
-  const [data, time] = raw;
-  const pathData = data.map((v, index)=>[time[index], v]);
-  const x_domain = [time[0], time[ - 1]];
+const addData = async (rawData, timeData, variable, file) => {  
+  const data = new Float64Array(rawData, 0, rawData.byteLength / 8);  // convert Uint8Array to Float64Array
+  const time = new Float64Array(timeData, 0, timeData.byteLength / 8);  // convert Uint8Array to Float64Array
+  const x_domain = [time[0], time[time.length - 1]];  // monotonic increasing time
   const y_domain = d3.extent(data);
-  const id = await generateUUID(file, variable);    // 生成唯一id
-  lineData.value[genDataKey(variable, file)] = {"pathData": pathData, "sigName": variable,
+  const id = await generateUUID(file, variable);    // 使用文件名+变量名生成唯一id
+  lineData.value[genDataKey(variable, file)] = {"pathData": data, "sigName": variable,
                                 "color": colorPalette[colorIndex++ % colorPalette.length], 
                                 "stroke": 1.5, "circle": false, "x_domain": x_domain, "y_domain": y_domain,
-                                "file": file, "uuid": id, "time": new Float32Array(time)}; // use float32Array for better performance
+                                "file": file, "uuid": id, "time": time}; // use float32Array for better performance
   jobQueue.value.push({"addPath": genDataKey(variable, file)});
 }
 
@@ -188,14 +189,14 @@ const onDeleteSignal = (uuid) => {
   }, 10); // 等待删除操作完成
 }
 
-const onValueLoad = async (value, variable, file) => {
+const onValueLoad = async (value, timeValue, variable, file) => {
 // receive value from SelectVars.vue
   console.log("onValueLoad got value: ", variable, file);
   const variableName = genDataKey(variable, file);
   if (varToAddQueue.includes(variableName)) {
     updateInprogress.value = true;
     // already dropped variable, just update data
-    addData(value, variable, file);
+    addData(value, timeValue, variable, file);
     varToAddQueue.splice(varToAddQueue.indexOf(variableName), 1);  // remove from queue
     if (varToAddQueue.length == 0) {
       document.body.style.cursor = "default";
@@ -206,7 +207,7 @@ const onValueLoad = async (value, variable, file) => {
     return // no need to update tempDataHolder because it is already drawn
   }
   if (!(variableName in tempDataHolder)) {
-    tempDataHolder[variableName] = {"data": value};
+    tempDataHolder[variableName] = {"data": value, "time": timeValue};
     const timer = setTimeout(() => {
       if (variableName in tempDataHolder && tempDataHolder[variableName].data) {
         console.log("remove data from temp data holder: ", variableName);
@@ -219,20 +220,18 @@ const onValueLoad = async (value, variable, file) => {
   }
 }
 
-const onAddSignal = (variable, file) => {
+const onAddSignal = async (variable, file) => {
   updateInprogress.value = true;
   document.body.style.cursor = "wait";
-  invoke("get_mf4_channel_data", {"mf4Path": file, "channelName": variable})   // start to read data from mf4 file when drag start
-          .then(res => {
-            addData(res, variable, file);
-          })
-          .catch(err => {
-            console.error(err);})
-          .finally(() => {
-            setTimeout(() => {
+  console.time("addSignal")
+  const data = await invoke("get_mf4_channel_data", {"mf4Path": file, "channelName": variable});
+  const timeData = await invoke("get_mf4_channel_time", {"mf4Path": file, "channelName": variable});
+  await addData(data, timeData, variable, file);
+  console.timeEnd("addSignal")
+  setTimeout(() => {
               updateInprogress.value = false;
-            }, 20); // 等待更新操作完成
-            document.body.style.cursor = "default";});
+            }, 20);
+  document.body.style.cursor = "default";
 }
 
 const openContextMenu = (event) => {

@@ -18,6 +18,7 @@ const props = defineProps({
   yDomain: Array,    // [ymin, ymax]
   hasJob: Boolean
 });
+let tempBoldSigs = [];
 const cursorInfo = defineModel("cursorInfo");
 const jobQueue = defineModel("jobQueue");
 const labelXOff = 45;
@@ -43,22 +44,23 @@ const updateCursor = (xOffset) => {
       .attr('opacity', 0).attr("class", "cursor-line");// Hide cursor line
       d3.selectAll('.cursor-label').attr('opacity', 0); // Hide cursor labels
       d3.select(chartContainer.value).select(`.time-label`).attr('opacity', 0);
+      const cursorRegion = d3.select(chartContainer.value).select('.cursor-region');
+      cursorRegion.select("rect").attr('class', '');
       cursorInfo.value.visible = false;
     } else {
         const xValue = xScale.invert(xOffset);  
         cursorInfo.value.time = xValue;  // Update cursor time
         const cursorRegion = d3.select(chartContainer.value).select('.cursor-region');
         cursorRegion.attr('transform', `translate(${xOffset}, 0)`);   // move the cursor region
-        d3.select(chartContainer.value).select('.cursor-line')
-        .attr('opacity', 1).attr("class", "cursor-line cursor-col-resize"); // Show cursor line
+        cursorRegion.select(".cursor-line").attr('opacity', 1); // Show cursor line
+        cursorRegion.select("rect").attr('class', 'cursor-col-resize');
         for (const variable in lineData) {
           const {color, uuid} = lineData[variable];
           const xDom = lineData[variable].x_domain;   
-          const dataList = lineData[variable].pathData;
           const label = d3.select(chartContainer.value).select(`#label-${uuid}`);
           const ySigScale = (customYScale != null && Object.hasOwn(customYScale, uuid)) ? customYScale[uuid] : yScale;
           if (xValue >= xDom[0] && xValue <= xDom[1]) {
-            const yValue = interpolateYCoordinate(dataList, xValue); // interpolate y value
+            const yValue = interpolateYCoordinate(lineData[variable].time, lineData[variable].pathData, xValue); // interpolate y value
             const yCoordination = ySigScale(yValue);
             if (!label.empty()) {
               label.attr('opacity', 1).attr('transform', `translate(${labelXOff}, ${yCoordination})`);
@@ -115,11 +117,18 @@ async function drawChart(x_domain, y_domain) {
       .attr('stroke', 'red')
       .attr('stroke-width', 2)
       .attr('opacity', 0)
-      .attr('class', 'cursor-line')
+      .attr('class', 'cursor-line');
+    cursorRegion.append('rect')
+      .attr('x', -10)
+      .attr('y', 0)
+      .attr('width', 20)
+      .attr('height', height - margin.bottom - margin.top)
+      .attr('opacity', 0)
+      .attr('class', 'cursor-col-resize')
       .on("mousedown", function(event) {
         if (event.button === 0 && cursor_visible) { // left button
             cursor_dragging = true;
-            d3.select(this).attr("stroke", "blue");
+            d3.select(chartContainer.value).select(".cursor-line").attr("stroke", "blue");
             window.addEventListener("mousemove", cursorDrag);
         }
       });
@@ -389,16 +398,22 @@ function drawLabel(svg, textStr, x, y, color = "blue", classattr="label", id=und
   const group = svg.append("g")
     .attr("transform", `translate(${x}, ${y})`)
     .attr("class", classattr)
-    .attr("style", "user-select:none");
+    .attr("style", "user-select:none")
+    .style("pointer-events", "none");
   if (id) group.attr("id", id);
-
+  const lines = textStr.split("\n");
   const text = group.append("text")
-    .text(textStr)
     .attr("font-size", "14px")
     .attr("x", 0)
     .attr("y", 0)
     .attr("text-anchor", "middle")
     .attr("font-weight", "bold");
+  lines.forEach((line, index) => {
+    text.append("tspan")
+      .attr("x", 0)
+      .attr("dy", index === 0 ? "0em" : "1.2em")
+      .text(line);
+  });
   const bbox = text.node().getBBox();
   group.insert("rect", "text")
     .attr("x", bbox.x - 10)
@@ -417,38 +432,31 @@ function drawLabel(svg, textStr, x, y, color = "blue", classattr="label", id=und
 async function drawPath(variableName, xDomain, yScaleSpec=null) {
   const {lineData} = props;  // updated lineData
   if (variableName in lineData) {
-    const {color, stroke, uuid, circle} = lineData[variableName];
+    const {color, stroke, uuid, circle, sigName, file} = lineData[variableName];
     yScaleSpec = (Object.hasOwn(customYScale, uuid))? customYScale[uuid]:yScaleSpec;
     if (!yScaleSpec) yScaleSpec = yScale;
-    let dataRaw = lineData[variableName]["pathData"];
-    console.time("dataSelect");
-    console.time("findRange");
     const xRange = findRange(lineData[variableName]["time"], xDomain);
-    console.timeEnd("findRange");
-    let data_to_draw = Array.from({length: xRange[1]-xRange[0]}, () => []);
-    let index = 0;
-    for (let i = xRange[0]; i < xRange[1]; i++) {
-      data_to_draw[index++] = dataRaw[i];
-    }
-    console.log("data_to_draw length:", data_to_draw.length, " from original length:", dataRaw.length);
-    console.timeEnd("dataSelect");
+    const yData = lineData[variableName]["pathData"].subarray(xRange[0], xRange[1] + 1);  // slice the data to reduce memory usage
+    const xData = lineData[variableName]["time"].subarray(xRange[0], xRange[1] + 1);
+    let dataToDraw = [];   // [[x1, y1], [x2, y2], ...]
     console.time("downsample");
-    if (data_to_draw.length > (width-margin.left-margin.right) * 10) {   // too many points, use quick downsample to increase performance
-        downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]).then((dataRes) => {  // 后台并行采样
-          pathreDraw(uuid, color, stroke, dataRes, circle, xScale, yScaleSpec);   // 绘制平滑曲线
-        })
-        data_to_draw = downsampleQuick(data_to_draw, (width-margin.left-margin.right));  // 快速采样显示  后续再使用并行采样
-    } else if (data_to_draw.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
-        data_to_draw = await downsampleParallel(data_to_draw, width-margin.left-margin.right, xDomain[0], xDomain[1]);
-    } else {} // no need to downsample
+    if (yData.length > (width-margin.left-margin.right)) {   // downsample if points number exceeds canvas width
+      dataToDraw = await downsampleParallel(yData, xData, width-margin.left-margin.right, xDomain[0], xDomain[1]);
+    } else {   // no need to downsample
+      for (let i = 0; i < yData.length; i++) {
+        dataToDraw.push([xData[i], yData[i]]);
+      }
+    }
     console.timeEnd("downsample");
-    pathreDraw(uuid, color, stroke, data_to_draw, circle, xScale, yScaleSpec);
+    pathreDraw(uuid, color, stroke, dataToDraw, circle, xScale, yScaleSpec);
+    pathreDrawSvg(uuid, color, stroke, dataToDraw, circle, xScale, yScaleSpec, sigName, file);
   } else {
     console.log("variableName not found in data:", variableName);
   }
 }
 
 const pathreDraw = (uuid, color, stroke, pathData, circle, xScalein, yScalein) => {   
+  console.time("pathreDraw");
   d3.select("#path-" + uuid).remove();   
   d3.select("#circle-" + uuid).remove();    
   const canvas = d3.select(chartContainer.value).append('canvas').attr('width', width-margin.right-margin.left)
@@ -472,6 +480,45 @@ const pathreDraw = (uuid, color, stroke, pathData, circle, xScalein, yScalein) =
       .attr('r', 3)
       .attr('fill', color);
   }
+  console.timeEnd("pathreDraw");
+}
+
+const pathreDrawSvg = (uuid, color, stroke, pathData, circle, xScalein, yScalein, sigName, file) => {   
+  console.time("pathreDrawsvg");
+  d3.select("#path-inter-" + uuid).remove();   
+  const line = d3.line()
+                  .x(d => xScalein(d[0]))
+                  .y(d => yScalein(d[1]));
+  chart.insert('path', '.cursor-region')    // only for interaction  not visible
+    .attr("id", `path-inter-${uuid}`).datum(pathData)
+    .attr('d', line)
+    .attr('stroke', 'transparent')
+    .attr('stroke-width', 20)
+    .attr('fill', 'none')
+    .style('pointer-events', 'stroke')  // make the path react to mouse event
+    .on("mouseover", (e)=> { 
+      const [x, y] = d3.pointer(e, chart.node());
+      drawLabel(chart, sigName+'\n'+file, x + 10, y - 10, color, "hover-label", `hover-${uuid}`);
+    }).on("mouseout", () => {
+      d3.select(chartContainer.value).selectAll(`#hover-${uuid}`).remove();
+    }).on("click", (e) => {
+      let boldLine = tempBoldSigs.pop();
+      if (boldLine === uuid) return; // already bolded
+      while (boldLine) {
+        processJob({resetStroke: boldLine});
+        boldLine = tempBoldSigs.pop();
+      }
+      tempBoldSigs.push(uuid);
+      pathreDraw(uuid, color, stroke*2, pathData, circle, xScalein, yScalein);
+    });
+  if (circle) {
+    chart.append('g').attr("id", `circle-${uuid}`).selectAll('circle').data(pathData).join('circle')
+      .attr('cx', d => xScalein(d[0]))
+      .attr('cy', d => yScalein(d[1]))
+      .attr('r', 3)
+      .attr('fill', color);
+  }
+  console.timeEnd("pathreDrawsvg");
 }
 
 function processJob (job) {
@@ -514,7 +561,18 @@ function processJob (job) {
         updateCursor(xScale(cursorInfo.value.time)); // hide cursor
       };
     } break;
+    case "resetStroke": {
+      const uuid = job[key];
+      const variableName = lookupVarkey(uuid);
+      drawPath(variableName, currentXDomain);
+    } break;
   }
+}
+
+const lookupVarkey = (uuid) => {
+  const {lineData} = props;
+  const foundKey = Object.keys(lineData).filter(key => lineData[key].uuid === uuid); // find the key that matches the uuid
+  return foundKey[0];
 }
 </script>
 
