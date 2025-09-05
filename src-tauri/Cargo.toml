@@ -23,5 +23,9 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2.7.0", features = [] }
 tauri-plugin-log = "2"
-mf4_parse = {path = "E:\\workspace\\rust\\mf4_parse\\rust_mf4"}
+mf4_parse = { git = "https://github.com/huibing/mf4_rust.git", branch = "main" }
 tauri-plugin-dialog = "2"
+
+
+[http]
+proxy = "http://proxy-chj.nioint.com:8080"   # 换成你本地代理地址

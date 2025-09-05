@@ -3,7 +3,6 @@ use tauri::Emitter;
 use tauri::ipc::Response;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 
 pub struct FileCache {
@@ -50,8 +49,9 @@ fn get_mf4_channels(mf4_path: &str, app: tauri::AppHandle, cache: tauri::State<F
         transmit_reading_progress(&app, progress)
     }));
     if let Ok(mf4) = mf4 {
-        let channel_names = mf4.get_channel_names();
+        let mut channel_names = mf4.get_channel_names();
         cache.insert(mf4_path.to_string(), mf4);  // save to cache
+        channel_names.sort_by_key(|s| s.chars().next().map(|c| c.to_ascii_lowercase())); // sort by first character
         Ok(channel_names)
     } else {
         Err(String::from("Error opening file"))
@@ -103,19 +103,4 @@ fn transmit_reading_progress(
 ) {
     app.emit("progress-message", progress)
         .unwrap();
-}
-
-
-fn get_channel_data(mf4: &Mf4Wrapper, channel_name: &str) -> Result<(Vec<f64>, Vec<f64>), String> {
-    let data: Vec<f64> = mf4.get_channel_data(channel_name)
-        .ok_or("Failed to get channel data")?
-        .try_into()
-        .map_err(|_| String::from("Failed to convert channel data"))?;
-    let time = mf4.get_channel_master_data(channel_name).ok_or("Failed to get channel data")?;
-    if let DataValue::REAL(time) = time {
-        let time: Vec<f64> = time.into_iter().map(|v| v.clone()).collect();
-        Ok((data, time))
-    } else {
-        Err(String::from("Time data is not of type REAL"))
-    }
 }
