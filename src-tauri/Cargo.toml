@@ -25,7 +25,3 @@ tauri = { version = "2.7.0", features = [] }
 tauri-plugin-log = "2"
 mf4_parse = { git = "https://github.com/huibing/mf4_rust.git", branch = "main" }
 tauri-plugin-dialog = "2"
-
-
-[http]
-proxy = "http://proxy-chj.nioint.com:8080"   # 换成你本地代理地址
