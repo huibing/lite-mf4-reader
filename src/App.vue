@@ -106,7 +106,7 @@ async function handleDrop(event) { // read mf4 channel data and feed to LinePlot
       if (key in tempDataHolder) {
         console.log('data already ready in temp data holder');
         clearTimeout(tempDataHolder[key].timer);
-        addData(tempDataHolder[key].data, variable[0], variable[1]);
+        addData(tempDataHolder[key].data, tempDataHolder[key].time, variable[0], variable[1]);
         delete tempDataHolder[key];
       } else {
         // data not ready, add to queue
